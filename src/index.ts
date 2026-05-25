@@ -21,8 +21,10 @@ const origins = [
 
 app.use(cors({ origin: origins, credentials: true }));
 app.use(express.json({ limit: "10mb" }));
-app.use(clerkMiddleware());
 
+app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
+app.use(clerkMiddleware());
 app.use("/api/auth",        authRouter);
 app.use("/api/negocios",    negociosRouter);
 app.use("/api/negocios",    productosRouter);
@@ -30,8 +32,6 @@ app.use("/api/negocios",    pedidosRouter);
 app.use("/api/negocios",    negocioRouter);
 app.use("/api/usuario",     usuarioRouter);
 app.use("/api/repartidor",  repartidorRouter);
-
-app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 app.listen(PORT, () => console.log(`YA VOY API en http://localhost:${PORT}`));
 export default app;
