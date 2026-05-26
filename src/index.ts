@@ -11,6 +11,7 @@ import usuarioRouter   from "./routes/usuario";
 import repartidorRouter from "./routes/repartidor";
 import configRouter    from "./routes/config";
 import notificationsRouter from "./routes/notifications";
+import stripeRouter from "./routes/stripe";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -36,6 +37,7 @@ app.use("/api/usuario",     usuarioRouter);
 app.use("/api/repartidor",  repartidorRouter);
 app.use("/api/config",      configRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/stripe", stripeRouter);
 
 app.listen(PORT, () => console.log(`YA VOY API en http://localhost:${PORT}`));
 export default app;
