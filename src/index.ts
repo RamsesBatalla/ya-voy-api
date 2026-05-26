@@ -12,6 +12,7 @@ import repartidorRouter from "./routes/repartidor";
 import configRouter    from "./routes/config";
 import notificationsRouter from "./routes/notifications";
 import stripeRouter from "./routes/stripe";
+import { initCronJobs } from "./cron";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -39,5 +40,5 @@ app.use("/api/config",      configRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/stripe", stripeRouter);
 
-app.listen(PORT, () => console.log(`YA VOY API en http://localhost:${PORT}`));
+app.listen(PORT, () => { console.log(`YA VOY API en http://localhost:${PORT}`); initCronJobs(); });
 export default app;
