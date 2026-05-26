@@ -1,4 +1,4 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { clerkMiddleware } from "@clerk/express";
@@ -9,6 +9,8 @@ import pedidosRouter   from "./routes/pedidos";
 import negocioRouter   from "./routes/negocio";
 import usuarioRouter   from "./routes/usuario";
 import repartidorRouter from "./routes/repartidor";
+import configRouter    from "./routes/config";
+import notificationsRouter from "./routes/notifications";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,6 +34,8 @@ app.use("/api/negocios",    pedidosRouter);
 app.use("/api/negocios",    negocioRouter);
 app.use("/api/usuario",     usuarioRouter);
 app.use("/api/repartidor",  repartidorRouter);
+app.use("/api/config",      configRouter);
+app.use("/api/notifications", notificationsRouter);
 
 app.listen(PORT, () => console.log(`YA VOY API en http://localhost:${PORT}`));
 export default app;
