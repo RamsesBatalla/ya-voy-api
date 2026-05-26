@@ -3,7 +3,7 @@ import Stripe from "stripe"
 import { getAuth } from "@clerk/express"
 
 const router = Router()
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2024-06-20" })
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
 
 // Crear PaymentIntent
 router.post("/payment-intent", async (req, res) => {
