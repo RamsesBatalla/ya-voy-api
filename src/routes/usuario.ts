@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { sql } from "../db";
 
 const router = Router();
@@ -42,6 +42,13 @@ router.get("/negocios/:id/productos", async (req, res) => {
 
 const PALABRAS = ["TIGRE","LUNA","SOL","PUMA","RAYO","NUBE","MAR","RIO","VIENTO","FUEGO","TIERRA","AGUILA","LOBO","OSO","ZORRO","LEON","TORO","COBRA","FLOR","ROCA","PIEDRA","AGUA","BRISA","MONTE","CIELO"];
 const genCodigo = () => PALABRAS[Math.floor(Math.random()*PALABRAS.length)];
+const genTres = (base: string): string[] => {
+  const otros = PALABRAS.filter(w => w !== base);
+  const shuffled = otros.sort(() => Math.random() - 0.5);
+  const dos = [shuffled[0], shuffled[1]];
+  const tres = [base, ...dos].sort(() => Math.random() - 0.5);
+  return tres;
+};
 const genDos = () => {
   const a = genCodigo();
   let b = genCodigo();
@@ -51,12 +58,14 @@ const genDos = () => {
 
 router.post("/pedidos", async (req, res) => {
   try {
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago } = req.body;
+    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega } = req.body;
     await sql`INSERT INTO usuarios (id, email, nombre, rol) VALUES (${clienteId}, '', '', 'cliente') ON CONFLICT (id) DO NOTHING`;
     const [codEntrega, codRest] = genDos();
+    const palabrasEntrega = genTres(codEntrega);
+    const palabrasRestaurante = genTres(codRest);
     const rows = await sql`
-      INSERT INTO pedidos (cliente_id, negocio_id, items, total, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante)
-      VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest})
+      INSERT INTO pedidos (cliente_id, negocio_id, items, total, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega)
+      VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null})
       RETURNING *
     `;
     res.json(rows[0]);
