@@ -21,4 +21,19 @@ router.patch("/:id/toggle", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+router.patch("/:id/perfil", async (req, res) => {
+  try {
+    const { nombre, direccion, telefono, descripcion } = req.body;
+    const rows = await sql`
+      UPDATE viveres SET
+        nombre = COALESCE(${nombre}, nombre),
+        direccion = COALESCE(${direccion}, direccion),
+        telefono = COALESCE(${telefono}, telefono),
+        descripcion = COALESCE(${descripcion}, descripcion)
+      WHERE id = ${req.params.id} RETURNING *
+    `;
+    res.json(rows[0]);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;
