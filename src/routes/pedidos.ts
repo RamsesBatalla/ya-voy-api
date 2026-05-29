@@ -49,4 +49,19 @@ router.patch("/pedidos/:id/status", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+router.patch("/pedidos/:id/cancelar", async (req, res) => {
+  try {
+    const rows = await sql`SELECT status, cliente_id FROM pedidos WHERE id = ${req.params.id}`
+    if (!rows.length) return res.status(404).json({ error: "Pedido no encontrado" })
+    const { status, cliente_id } = rows[0]
+    if (!["nuevo", "preparando"].includes(status))
+      return res.status(400).json({ error: "No se puede cancelar en este punto" })
+    await sql`UPDATE pedidos SET status = ${`cancelado`}, cancelado_en = NOW() WHERE id = ${req.params.id}`
+    if (cliente_id) {
+      await sendPushToUser(sql, cliente_id, "Pedido cancelado", "El restaurante cancelo tu pedido", { pedidoId: req.params.id })
+    }
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 export default router
