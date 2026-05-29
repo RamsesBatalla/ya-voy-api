@@ -36,4 +36,17 @@ router.patch("/:id/perfil", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+router.patch("/:id/horarios", async (req, res) => {
+  try {
+    const { horarios } = req.body;
+    // Agregar columna si no existe
+    await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS horarios JSONB`;
+    const rows = await sql`
+      UPDATE viveres SET horarios = ${JSON.stringify(horarios)}::jsonb
+      WHERE id = ${req.params.id} RETURNING *
+    `;
+    res.json(rows[0]);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;
