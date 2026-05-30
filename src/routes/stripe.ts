@@ -29,7 +29,7 @@ router.post("/payment-intent", async (req, res) => {
       }
     }
 
-    const piParams: Stripe.PaymentIntentCreateParams = {
+    const piParams: any = {
       amount: amountCentavos,
       currency,
       metadata: { negocioId: negocioId || "", repartidorId: repartidorId || "", ...metadata },
@@ -133,7 +133,7 @@ router.post("/webhook", async (req, res) => {
   const sig = req.headers["stripe-signature"] as string
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || ""
 
-  let event: Stripe.Event
+  let event: any
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret)
   } catch (e: any) {
@@ -141,7 +141,7 @@ router.post("/webhook", async (req, res) => {
   }
 
   if (event.type === "payment_intent.succeeded") {
-    const pi = event.data.object as Stripe.PaymentIntent
+    const pi = event.data.object as any
     const repartidorId = pi.metadata?.repartidorId
 
     if (repartidorId) {
