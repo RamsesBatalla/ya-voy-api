@@ -123,8 +123,10 @@ router.get("/pedidos/detalle/:id", async (req, res) => {
 router.get("/pedidos/:userId", async (req, res) => {
   try {
     const rows = await sql`
-      SELECT p.*, v.nombre as negocio_nombre, v.imagen_url as negocio_imagen
+      SELECT p.*, v.nombre as negocio_nombre, v.imagen_url as negocio_imagen,
+             r.rating as repartidor_rating, r.vehiculo as repartidor_vehiculo
       FROM pedidos p LEFT JOIN viveres v ON v.id = p.negocio_id
+      LEFT JOIN repartidores r ON r.id = p.repartidor_id
       WHERE p.cliente_id = ${req.params.userId}
       ORDER BY p.creado_en DESC LIMIT 20
     `;
