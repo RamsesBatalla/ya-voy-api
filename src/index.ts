@@ -15,6 +15,7 @@ import stripeRouter       from "./routes/stripe";
 import soporteRouter      from "./routes/soporte";
 import bloqueosRouter     from "./routes/bloqueos";
 import retirosRouter      from "./routes/retiros";
+import fondoRouter        from "./routes/fondo";
 import { initCronJobs } from "./cron";
 
 const app = express();
@@ -39,6 +40,7 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOS
 app.use("/api/stripe",   stripeRouter);
 app.use("/api/bloqueos", bloqueosRouter);
 app.use("/api/retiros",  retirosRouter);
+app.use("/api/fondo",    fondoRouter);
 
 app.use(clerkMiddleware());
 app.use("/api/auth",          authRouter);
