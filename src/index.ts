@@ -17,6 +17,7 @@ import bloqueosRouter      from "./routes/bloqueos";
 import retirosRouter       from "./routes/retiros";
 import fondoRouter         from "./routes/fondo";
 import contingenciasRouter from "./routes/contingencias";
+import mensajesRouter      from "./routes/mensajes";
 import { initCronJobs } from "./cron";
 
 const app = express();
@@ -30,7 +31,6 @@ const origins = [
 
 app.use(cors({ origin: origins, credentials: true }));
 
-// Webhook Stripe necesita body RAW — va ANTES de express.json()
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res, next) => {
   (stripeRouter as any).handle(req, res, next);
 });
@@ -43,6 +43,7 @@ app.use("/api/bloqueos",      bloqueosRouter);
 app.use("/api/retiros",       retirosRouter);
 app.use("/api/fondo",         fondoRouter);
 app.use("/api/contingencias", contingenciasRouter);
+app.use("/api/mensajes",      mensajesRouter);
 
 app.use(clerkMiddleware());
 app.use("/api/auth",          authRouter);
