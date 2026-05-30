@@ -25,6 +25,12 @@ const origins = [
 ];
 
 app.use(cors({ origin: origins, credentials: true }));
+
+// Webhook de Stripe necesita body RAW — va ANTES de express.json()
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res, next) => {
+  (stripeRouter as any).handle(req, res, next);
+});
+
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
