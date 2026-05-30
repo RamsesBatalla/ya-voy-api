@@ -3,6 +3,20 @@ import { sql } from "../db";
 
 const router = Router();
 
+const initCupones = async () => {
+  await sql`CREATE TABLE IF NOT EXISTS cupones (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    codigo TEXT UNIQUE NOT NULL,
+    tipo TEXT NOT NULL,
+    valor NUMERIC NOT NULL,
+    usos_max INT DEFAULT 1,
+    usos_actual INT DEFAULT 0,
+    expira_en TIMESTAMPTZ,
+    activo BOOLEAN DEFAULT true,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+}
+initCupones().catch(e => console.error("Error init cupones:", e.message))
 
 router.get("/productos/feed", async (_req, res) => {
   try {
@@ -56,9 +70,28 @@ const genDos = () => {
   return [a, b];
 };
 
+// POST /api/usuario/cupones/validar
+router.post("/cupones/validar", async (req, res) => {
+  try {
+    const { codigo, total } = req.body
+    if (!codigo) return res.status(400).json({ error: "Codigo requerido" })
+    const rows = await sql`SELECT * FROM cupones WHERE codigo = ${codigo.toUpperCase().trim()} AND activo = true`
+    if (!rows.length) return res.status(404).json({ error: "Cupon invalido o no existe" })
+    const cupon = rows[0]
+    if (cupon.expira_en && new Date(cupon.expira_en) < new Date())
+      return res.status(400).json({ error: "Este cupon ha expirado" })
+    if (cupon.usos_max && cupon.usos_actual >= cupon.usos_max)
+      return res.status(400).json({ error: "Este cupon ya no tiene usos disponibles" })
+    const descuento = cupon.tipo === "porcentaje"
+      ? Math.min(Number(total) * Number(cupon.valor) / 100, Number(total))
+      : Math.min(Number(cupon.valor), Number(total))
+    res.json({ valido: true, descuento: Number(descuento.toFixed(2)), tipo: cupon.tipo, valor: Number(cupon.valor), codigo: cupon.codigo })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 router.post("/pedidos", async (req, res) => {
   try {
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega } = req.body;
+    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon } = req.body;
     await sql`INSERT INTO usuarios (id, email, nombre, rol) VALUES (${clienteId}, '', '', 'cliente') ON CONFLICT (id) DO NOTHING`;
     const [codEntrega, codRest] = genDos();
     const palabrasEntrega = genTres(codEntrega);
@@ -68,6 +101,10 @@ router.post("/pedidos", async (req, res) => {
       VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null})
       RETURNING *
     `;
+    // Incrementar uso del cupon si se uso
+    if (cuponCodigo) {
+      await sql`UPDATE cupones SET usos_actual = usos_actual + 1 WHERE codigo = ${cuponCodigo}`.catch(() => {})
+    }
     res.json(rows[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -106,8 +143,6 @@ router.patch("/pedidos/confirmar", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-
-// Cancelar pedido (solo si status es nuevo o preparando)
 router.patch("/pedidos/:id/cancelar", async (req, res) => {
   try {
     const rows = await sql`SELECT status FROM pedidos WHERE id = ${req.params.id}`;
@@ -120,12 +155,10 @@ router.patch("/pedidos/:id/cancelar", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Calificar pedido
 router.patch("/pedidos/:id/rating", async (req, res) => {
   try {
     const { rating_restaurante, rating_repartidor, comentario_rating } = req.body;
     await sql`UPDATE pedidos SET rating_restaurante = ${rating_restaurante}, rating_repartidor = ${rating_repartidor}, comentario_rating = ${comentario_rating || ''} WHERE id = ${req.params.id}`;
-    // Actualizar rating promedio del negocio
     if (rating_restaurante) {
       await sql`UPDATE viveres SET rating = (SELECT AVG(rating_restaurante) FROM pedidos WHERE negocio_id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id}) AND rating_restaurante IS NOT NULL) WHERE id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id})`;
     }
