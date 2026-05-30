@@ -1,6 +1,5 @@
 import { Router } from "express"
 import Stripe from "stripe"
-import { getAuth } from "@clerk/express"
 
 const router = Router()
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
@@ -8,16 +7,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "20
 // Crear PaymentIntent
 router.post("/payment-intent", async (req, res) => {
   try {
-    const { userId } = getAuth(req)
-    if (!userId) return res.status(401).json({ error: "No autenticado" })
-
     const { amount, currency = "mxn", metadata = {} } = req.body
     if (!amount || amount < 10) return res.status(400).json({ error: "Monto invalido" })
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // centavos
       currency,
-      metadata: { userId, ...metadata },
+      metadata,
       automatic_payment_methods: { enabled: true },
     })
 
