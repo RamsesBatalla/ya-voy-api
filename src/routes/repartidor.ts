@@ -137,3 +137,22 @@ router.patch("/pedidos/:id/expirar-espera", async (req, res) => {
 
 export default router;
 
+
+// PATCH /api/repartidor/:userId/ubicacion — actualizar ubicacion en tiempo real
+router.patch("/:userId/ubicacion", async (req, res) => {
+  try {
+    const { lat, lng } = req.body
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat_actual NUMERIC`
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lng_actual NUMERIC`
+    await sql`UPDATE repartidores SET lat_actual = ${lat}, lng_actual = ${lng} WHERE id = ${req.params.userId}`
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// GET /api/repartidor/:userId/ubicacion — obtener ubicacion actual
+router.get("/:userId/ubicacion", async (req, res) => {
+  try {
+    const rows = await sql`SELECT lat_actual, lng_actual FROM repartidores WHERE id = ${req.params.userId}`
+    res.json(rows[0] || { lat_actual: null, lng_actual: null })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
