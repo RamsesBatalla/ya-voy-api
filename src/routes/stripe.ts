@@ -167,3 +167,76 @@ router.post("/webhook", async (req, res) => {
 })
 
 export default router
+
+// ─── CUSTOMER + TARJETAS GUARDADAS ────────────────────────────────────────────
+
+// POST /api/stripe/customer — crear o recuperar Stripe Customer para un usuario
+router.post("/customer", async (req, res) => {
+  try {
+    const { userId, email, nombre } = req.body
+    if (!userId) return res.status(400).json({ error: "userId requerido" })
+
+    // Verificar si ya tiene customer
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`
+    const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${userId}`
+    let customerId = rows[0]?.stripe_customer_id
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: email || undefined,
+        name: nombre || undefined,
+        metadata: { userId },
+      })
+      customerId = customer.id
+      await sql`UPDATE usuarios SET stripe_customer_id = ${customerId} WHERE id = ${userId}`
+    }
+
+    res.json({ customerId })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/stripe/setup-intent — para agregar tarjeta sin cobrar
+router.post("/setup-intent", async (req, res) => {
+  try {
+    const { userId } = req.body
+    if (!userId) return res.status(400).json({ error: "userId requerido" })
+
+    const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${userId}`
+    const customerId = rows[0]?.stripe_customer_id
+    if (!customerId) return res.status(400).json({ error: "Customer no encontrado. Llama a /api/stripe/customer primero" })
+
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId,
+      payment_method_types: ["card"],
+    })
+
+    res.json({ clientSecret: setupIntent.client_secret })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// GET /api/stripe/payment-methods/:userId — listar tarjetas guardadas
+router.get("/payment-methods/:userId", async (req, res) => {
+  try {
+    const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${req.params.userId}`
+    const customerId = rows[0]?.stripe_customer_id
+    if (!customerId) return res.json({ cards: [] })
+
+    const methods = await stripe.paymentMethods.list({ customer: customerId, type: "card" })
+    const cards = methods.data.map(pm => ({
+      id: pm.id,
+      brand: pm.card?.brand,
+      last4: pm.card?.last4,
+      exp_month: pm.card?.exp_month,
+      exp_year: pm.card?.exp_year,
+    }))
+    res.json({ cards })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// DELETE /api/stripe/payment-methods/:pmId — eliminar tarjeta
+router.delete("/payment-methods/:pmId", async (req, res) => {
+  try {
+    await stripe.paymentMethods.detach(req.params.pmId)
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
