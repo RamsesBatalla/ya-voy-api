@@ -28,6 +28,7 @@ app.use(cors({ origin: origins, credentials: true }));
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.use("/api/stripe", stripeRouter);
 
 app.use(clerkMiddleware());
 app.use("/api/auth",        authRouter);
@@ -39,7 +40,6 @@ app.use("/api/usuario",     usuarioRouter);
 app.use("/api/repartidor",  repartidorRouter);
 app.use("/api/config",      configRouter);
 app.use("/api/notifications", notificationsRouter);
-app.use("/api/stripe", stripeRouter);
 app.use("/api/soporte", soporteRouter);
 
 app.listen(PORT, () => { console.log(`YA VOY API en http://localhost:${PORT}`); initCronJobs(); });
