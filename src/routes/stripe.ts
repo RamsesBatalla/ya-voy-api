@@ -5,17 +5,50 @@ import { sql } from "../db"
 const router = Router()
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
 
-const COMISION_PCT = 0.12  // 12% Batalla Group
-const ENVIO = 35           // costo fijo de envio en MXN
+const getConfig = async () => {
+  const rows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','fondo_pct','envio_precio_km','envio_minimo')`
+  const cfg: Record<string,number> = {}
+  rows.forEach((r: any) => { cfg[r.clave] = parseFloat(r.valor) })
+  return {
+    comisionPct: (cfg.comision_pct ?? 18) / 100,
+    fondoPct:    (cfg.fondo_pct    ?? 20) / 100,
+    precioPorKm: cfg.envio_precio_km ?? 12,
+    envioMinimo: cfg.envio_minimo    ?? 35,
+  }
+}
+
+// ─── CALCULAR COSTO ENVIO ─────────────────────────────────────────────────
+router.post("/calcular-envio", async (req, res) => {
+  try {
+    const { latUsuario, lngUsuario, latNegocio, lngNegocio } = req.body
+    if (!latUsuario || !lngUsuario || !latNegocio || !lngNegocio)
+      return res.status(400).json({ error: "Coordenadas requeridas" })
+
+    const url = "http://router.project-osrm.org/route/v1/driving/" +
+      lngNegocio + "," + latNegocio + ";" + lngUsuario + "," + latUsuario +
+      "?overview=false"
+
+    const r = await fetch(url)
+    const data: any = await r.json()
+    const distanciaKm = (data.routes?.[0]?.distance ?? 0) / 1000
+
+    const cfg = await getConfig()
+    const costoEnvio = Math.max(cfg.envioMinimo, Math.round(distanciaKm * cfg.precioPorKm))
+
+    res.json({ distanciaKm: Math.round(distanciaKm * 10) / 10, costoEnvio })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
 
 // ─── PAYMENT INTENT ────────────────────────────────────────────────────────
 router.post("/payment-intent", async (req, res) => {
   try {
-    const { amount, currency = "mxn", negocioId, repartidorId, metadata = {} } = req.body
+    const { amount, currency = "mxn", negocioId, repartidorId, costoEnvio, metadata = {} } = req.body
     if (!amount || amount < 10) return res.status(400).json({ error: "Monto invalido" })
 
+    const cfg = await getConfig()
     const amountCentavos = Math.round(amount * 100)
-    const comisionCentavos = Math.round(amountCentavos * COMISION_PCT)
+    const subtotalSinEnvio = Math.round((amount - (costoEnvio || 0)) * 100)
+    const comisionCentavos = Math.round(subtotalSinEnvio * cfg.comisionPct)
 
     let transferData: any = undefined
     let applicationFee: number | undefined = undefined
@@ -32,7 +65,12 @@ router.post("/payment-intent", async (req, res) => {
     const piParams: any = {
       amount: amountCentavos,
       currency,
-      metadata: { negocioId: negocioId || "", repartidorId: repartidorId || "", ...metadata },
+      metadata: {
+        negocioId: negocioId || "",
+        repartidorId: repartidorId || "",
+        costoEnvio: String(costoEnvio || 0),
+        ...metadata
+      },
       automatic_payment_methods: { enabled: true },
     }
 
@@ -42,11 +80,7 @@ router.post("/payment-intent", async (req, res) => {
     }
 
     const paymentIntent = await stripe.paymentIntents.create(piParams)
-
-    res.json({
-      clientSecret: paymentIntent.client_secret,
-      paymentIntentId: paymentIntent.id,
-    })
+    res.json({ clientSecret: paymentIntent.client_secret, paymentIntentId: paymentIntent.id })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -97,8 +131,8 @@ router.post("/connect/onboarding", async (req, res) => {
     const origin = process.env.FRONTEND_RESTAURANTE || "http://localhost:5173"
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: `${origin}/stripe-connect-refresh`,
-      return_url: `${origin}/stripe-connect-return`,
+      refresh_url: origin + "/stripe-connect-refresh",
+      return_url: origin + "/stripe-connect-return",
       type: "account_onboarding",
     })
 
@@ -143,6 +177,7 @@ router.post("/webhook", async (req, res) => {
   if (event.type === "payment_intent.succeeded") {
     const pi = event.data.object as any
     const repartidorId = pi.metadata?.repartidorId
+    const costoEnvio = parseFloat(pi.metadata?.costoEnvio || "35")
 
     if (repartidorId) {
       try {
@@ -150,7 +185,7 @@ router.post("/webhook", async (req, res) => {
         const repAccountId = rows[0]?.stripe_account_id
         if (repAccountId) {
           await stripe.transfers.create({
-            amount: Math.round(ENVIO * 100),
+            amount: Math.round(costoEnvio * 100),
             currency: "mxn",
             destination: repAccountId,
             source_transaction: pi.latest_charge as string,
@@ -166,77 +201,55 @@ router.post("/webhook", async (req, res) => {
   res.json({ received: true })
 })
 
-export default router
+// ─── CUSTOMER + TARJETAS GUARDADAS ────────────────────────────────────────
 
-// ─── CUSTOMER + TARJETAS GUARDADAS ────────────────────────────────────────────
-
-// POST /api/stripe/customer — crear o recuperar Stripe Customer para un usuario
 router.post("/customer", async (req, res) => {
   try {
     const { userId, email, nombre } = req.body
     if (!userId) return res.status(400).json({ error: "userId requerido" })
-
-    // Verificar si ya tiene customer
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`
     const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${userId}`
     let customerId = rows[0]?.stripe_customer_id
-
     if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: email || undefined,
-        name: nombre || undefined,
-        metadata: { userId },
-      })
+      const customer = await stripe.customers.create({ email: email || undefined, name: nombre || undefined, metadata: { userId } })
       customerId = customer.id
       await sql`UPDATE usuarios SET stripe_customer_id = ${customerId} WHERE id = ${userId}`
     }
-
     res.json({ customerId })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/stripe/setup-intent — para agregar tarjeta sin cobrar
 router.post("/setup-intent", async (req, res) => {
   try {
     const { userId } = req.body
     if (!userId) return res.status(400).json({ error: "userId requerido" })
-
     const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${userId}`
     const customerId = rows[0]?.stripe_customer_id
-    if (!customerId) return res.status(400).json({ error: "Customer no encontrado. Llama a /api/stripe/customer primero" })
-
-    const setupIntent = await stripe.setupIntents.create({
-      customer: customerId,
-      payment_method_types: ["card"],
-    })
-
+    if (!customerId) return res.status(400).json({ error: "Customer no encontrado" })
+    const setupIntent = await stripe.setupIntents.create({ customer: customerId, payment_method_types: ["card"] })
     res.json({ clientSecret: setupIntent.client_secret })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// GET /api/stripe/payment-methods/:userId — listar tarjetas guardadas
 router.get("/payment-methods/:userId", async (req, res) => {
   try {
     const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${req.params.userId}`
     const customerId = rows[0]?.stripe_customer_id
     if (!customerId) return res.json({ cards: [] })
-
     const methods = await stripe.paymentMethods.list({ customer: customerId, type: "card" })
     const cards = methods.data.map(pm => ({
-      id: pm.id,
-      brand: pm.card?.brand,
-      last4: pm.card?.last4,
-      exp_month: pm.card?.exp_month,
-      exp_year: pm.card?.exp_year,
+      id: pm.id, brand: pm.card?.brand, last4: pm.card?.last4,
+      exp_month: pm.card?.exp_month, exp_year: pm.card?.exp_year,
     }))
     res.json({ cards })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// DELETE /api/stripe/payment-methods/:pmId — eliminar tarjeta
 router.delete("/payment-methods/:pmId", async (req, res) => {
   try {
     await stripe.paymentMethods.detach(req.params.pmId)
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
+
+export default router

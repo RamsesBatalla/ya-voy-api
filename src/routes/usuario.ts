@@ -3,7 +3,7 @@ import { sql } from "../db";
 
 const router = Router();
 
-const initCupones = async () => {
+const initTablas = async () => {
   await sql`CREATE TABLE IF NOT EXISTS cupones (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     codigo TEXT UNIQUE NOT NULL,
@@ -15,8 +15,9 @@ const initCupones = async () => {
     activo BOOLEAN DEFAULT true,
     creado_en TIMESTAMPTZ DEFAULT NOW()
   )`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS costo_envio NUMERIC DEFAULT 35`
 }
-initCupones().catch(e => console.error("Error init cupones:", e.message))
+initTablas().catch(e => console.error("Error init tablas:", e.message))
 
 router.get("/productos/feed", async (_req, res) => {
   try {
@@ -60,8 +61,7 @@ const genTres = (base: string): string[] => {
   const otros = PALABRAS.filter(w => w !== base);
   const shuffled = otros.sort(() => Math.random() - 0.5);
   const dos = [shuffled[0], shuffled[1]];
-  const tres = [base, ...dos].sort(() => Math.random() - 0.5);
-  return tres;
+  return [base, ...dos].sort(() => Math.random() - 0.5);
 };
 const genDos = () => {
   const a = genCodigo();
@@ -70,7 +70,6 @@ const genDos = () => {
   return [a, b];
 };
 
-// POST /api/usuario/cupones/validar
 router.post("/cupones/validar", async (req, res) => {
   try {
     const { codigo, total } = req.body
@@ -91,17 +90,17 @@ router.post("/cupones/validar", async (req, res) => {
 
 router.post("/pedidos", async (req, res) => {
   try {
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon } = req.body;
+    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio } = req.body;
     await sql`INSERT INTO usuarios (id, email, nombre, rol) VALUES (${clienteId}, '', '', 'cliente') ON CONFLICT (id) DO NOTHING`;
     const [codEntrega, codRest] = genDos();
     const palabrasEntrega = genTres(codEntrega);
     const palabrasRestaurante = genTres(codRest);
+    const envio = costoEnvio ?? 35;
     const rows = await sql`
-      INSERT INTO pedidos (cliente_id, negocio_id, items, total, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega)
-      VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null})
+      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega)
+      VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${envio}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null})
       RETURNING *
     `;
-    // Incrementar uso del cupon si se uso
     if (cuponCodigo) {
       await sql`UPDATE cupones SET usos_actual = usos_actual + 1 WHERE codigo = ${cuponCodigo}`.catch(() => {})
     }
