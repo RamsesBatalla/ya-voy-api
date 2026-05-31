@@ -15,7 +15,7 @@ router.get("/:negocioId/pedidos", async (req, res) => {
   try {
     const rows = await sql`
       SELECT * FROM pedidos WHERE negocio_id = ${req.params.negocioId}
-      ORDER BY creado_en DESC LIMIT 50`
+      ORDER BY creado_en DESC LIMIT 500`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
