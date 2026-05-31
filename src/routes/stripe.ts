@@ -35,7 +35,9 @@ router.post("/calcular-envio", async (req, res) => {
     const cfg = await getConfig()
     const costoEnvio = Math.max(cfg.envioMinimo, Math.round(distanciaKm * cfg.precioPorKm))
 
-    res.json({ distanciaKm: Math.round(distanciaKm * 10) / 10, costoEnvio })
+    const tiempoMin = Math.ceil(distanciaKm / 25 * 60) + 10 // velocidad promedio 25km/h + 10min prep
+    const tiempoEstimado = tiempoMin <= 15 ? "10-15 min" : tiempoMin <= 25 ? "15-25 min" : tiempoMin <= 40 ? "25-40 min" : Math.ceil(tiempoMin/5)*5 + " min"
+    res.json({ distanciaKm: Math.round(distanciaKm * 10) / 10, costoEnvio, tiempoEstimado })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 

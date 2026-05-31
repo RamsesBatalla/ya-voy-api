@@ -16,6 +16,7 @@ const initTablas = async () => {
     creado_en TIMESTAMPTZ DEFAULT NOW()
   )`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS costo_envio NUMERIC DEFAULT 35`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tiempo_estimado TEXT`
 }
 initTablas().catch(e => console.error("Error init tablas:", e.message))
 
@@ -90,7 +91,7 @@ router.post("/cupones/validar", async (req, res) => {
 
 router.post("/pedidos", async (req, res) => {
   try {
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio } = req.body;
+    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio, tiempoEstimado } = req.body;
     await sql`INSERT INTO usuarios (id, email, nombre, rol) VALUES (${clienteId}, '', '', 'cliente') ON CONFLICT (id) DO NOTHING`;
     const [codEntrega, codRest] = genDos();
     const palabrasEntrega = genTres(codEntrega);
