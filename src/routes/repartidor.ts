@@ -150,4 +150,22 @@ router.get("/", async (_req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+
+// PATCH /api/repartidor/:userId/ubicacion
+router.patch("/:userId/ubicacion", async (req, res) => {
+  try {
+    const { lat, lng } = req.body
+    if (!lat || !lng) return res.status(400).json({ error: "lat y lng requeridos" })
+    await sql`UPDATE repartidores SET lat_actual = ${lat}, lng_actual = ${lng} WHERE id = ${req.params.userId}`
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// GET /api/repartidor/:userId/ubicacion
+router.get("/:userId/ubicacion", async (req, res) => {
+  try {
+    const rows = await sql`SELECT lat_actual, lng_actual FROM repartidores WHERE id = ${req.params.userId}`
+    res.json(rows[0] || { lat_actual: null, lng_actual: null })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
 export default router
