@@ -41,6 +41,32 @@ export function initCronJobs() {
         WHERE updated_at < NOW() - INTERVAL '60 days'
         RETURNING user_id`
       console.log("Cron: " + r2.length + " tokens viejos eliminados")
+      const r3 = await sql`
+        DELETE FROM mensajes
+        WHERE creado_en < NOW() - INTERVAL '90 days'
+        RETURNING id`
+      console.log("Cron: " + r3.length + " mensajes viejos eliminados")
+
+      const r4 = await sql`
+        DELETE FROM contingencias
+        WHERE status = 'resuelto'
+        AND resuelto_en < NOW() - INTERVAL '90 days'
+        RETURNING id`
+      console.log("Cron: " + r4.length + " contingencias viejas eliminadas")
+
+      const r5 = await sql`
+        DELETE FROM retiros
+        WHERE status = 'pagado'
+        AND fecha_pago < NOW() - INTERVAL '90 days'
+        RETURNING id`
+      console.log("Cron: " + r5.length + " retiros viejos eliminados")
+
+      const r6 = await sql`
+        DELETE FROM reportes_soporte
+        WHERE status = 'resuelto'
+        AND resuelto_en < NOW() - INTERVAL '90 days'
+        RETURNING id`
+      console.log("Cron: " + r6.length + " reportes viejos eliminados")
     } catch(e: any) {
       console.error("Cron error:", e.message)
     }
