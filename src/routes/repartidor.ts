@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { sql } from "../db";
 
 const router = Router();
@@ -135,24 +135,19 @@ router.patch("/pedidos/:id/expirar-espera", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-export default router;
-
-
-// PATCH /api/repartidor/:userId/ubicacion — actualizar ubicacion en tiempo real
-router.patch("/:userId/ubicacion", async (req, res) => {
+// GET /api/repartidor/online — todos los repartidores online con ubicacion
+// GET /api/repartidor/online — repartidores online con ubicacion
+router.get("/online", async (_req, res) => {
   try {
-    const { lat, lng } = req.body
-    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat_actual NUMERIC`
-    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lng_actual NUMERIC`
-    await sql`UPDATE repartidores SET lat_actual = ${lat}, lng_actual = ${lng} WHERE id = ${req.params.userId}`
-    res.json({ ok: true })
+    const rows = await sql`
+      SELECT r.id, r.vehiculo, r.placa, r.rating, r.lat_actual, r.lng_actual,
+             u.nombre, u.email, u.foto_url
+      FROM repartidores r
+      LEFT JOIN usuarios u ON u.id = r.id
+      WHERE r.status = 'online'
+    `
+    res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// GET /api/repartidor/:userId/ubicacion — obtener ubicacion actual
-router.get("/:userId/ubicacion", async (req, res) => {
-  try {
-    const rows = await sql`SELECT lat_actual, lng_actual FROM repartidores WHERE id = ${req.params.userId}`
-    res.json(rows[0] || { lat_actual: null, lng_actual: null })
-  } catch (e: any) { res.status(500).json({ error: e.message }) }
-})
+export default router
