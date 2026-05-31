@@ -137,7 +137,7 @@ router.patch("/pedidos/:id/expirar-espera", async (req, res) => {
 
 // GET /api/repartidor/online — todos los repartidores online con ubicacion
 // GET /api/repartidor/online — repartidores online con ubicacion
-router.get("/online", async (_req, res) => {
+router.get("/", async (_req, res) => {
   try {
     const rows = await sql`
       SELECT r.id, r.vehiculo, r.placa, r.rating, r.lat_actual, r.lng_actual,

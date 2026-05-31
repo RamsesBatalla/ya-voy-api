@@ -44,6 +44,8 @@ app.use("/api/retiros",       retirosRouter);
 app.use("/api/fondo",         fondoRouter);
 app.use("/api/contingencias", contingenciasRouter);
 app.use("/api/mensajes",      mensajesRouter);
+app.use("/api/notificaciones", notificationsRouter);
+app.use("/api/repartidor/online", repartidorRouter);
 
 app.use(clerkMiddleware());
 app.use("/api/auth",          authRouter);
