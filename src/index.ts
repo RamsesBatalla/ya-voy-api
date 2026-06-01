@@ -1,4 +1,8 @@
 import "dotenv/config";
+import * as Sentry from "@sentry/node"
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.2 })
+}
 import express from "express";
 import cors from "cors";
 import { clerkMiddleware } from "@clerk/express";
@@ -20,6 +24,8 @@ import contingenciasRouter from "./routes/contingencias";
 import mensajesRouter      from "./routes/mensajes";
 import { initCronJobs } from "./cron";
 
+import { createServer } from "http"
+import { initWebSocket } from "./websocket"
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -60,5 +66,5 @@ app.use("/api/config",        configRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/soporte",       soporteRouter);
 
-app.listen(PORT, () => { console.log(`YA VOY API en http://localhost:${PORT}`); initCronJobs(); });
+const server = createServer(app); initWebSocket(server); server.listen(PORT, () => { console.log(`YA VOY API en http://localhost:${PORT}`); initCronJobs(); });
 export default app;

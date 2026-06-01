@@ -1,5 +1,6 @@
 import cron from "node-cron"
 import { sql } from "./db"
+import { sendPushToUser } from "./firebase"
 
 const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME || "dpihs4gtg"
 const CLOUDINARY_KEY   = process.env.CLOUDINARY_API_KEY || ""
@@ -83,6 +84,7 @@ export function initCronJobs() {
 
       for (const p of viejos) {
         await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW() WHERE id = ${p.id}`
+        await sendPushToUser(sql, p.cliente_id, "Tu pedido fue cancelado", "No encontramos un repartidor disponible. Intenta de nuevo en unos minutos.", { tipo: "pedido_cancelado", pedido_id: String(p.id) }).catch(() => {})
         const nuevos = (Number(p.incidentes_count) || 0) + 1
         if (nuevos >= 3) {
           await sql`UPDATE viveres SET incidentes_count = ${nuevos}, suspendido = true, bloqueado = true, razon_bloqueo = '3 pedidos abandonados — suspendido automaticamente' WHERE id = ${p.negocio_id}`
