@@ -49,4 +49,44 @@ router.patch("/:id/horarios", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+
+// GET /api/negocios/:id/cupones
+router.get("/:id/cupones", async (req, res) => {
+  try {
+    const rows = await sql`SELECT * FROM cupones WHERE negocio_id = ${req.params.id} ORDER BY creado_en DESC`
+    res.json(rows)
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/negocios/:id/cupones
+router.post("/:id/cupones", async (req, res) => {
+  try {
+    const { codigo, tipo, valor, usos_max, expira_en, minimo_compra, nombre, descripcion } = req.body
+    if (!codigo || !tipo || !valor) return res.status(400).json({ error: "codigo, tipo y valor requeridos" })
+    const existe = await sql`SELECT id FROM cupones WHERE codigo = ${codigo.toUpperCase().trim()}`
+    if (existe.length) return res.status(409).json({ error: "Ya existe un cupon con ese codigo" })
+    const rows = await sql`
+      INSERT INTO cupones (codigo, tipo, valor, usos_max, expira_en, minimo_compra, nombre, descripcion, negocio_id)
+      VALUES (${codigo.toUpperCase().trim()}, ${tipo}, ${valor}, ${usos_max || 100}, ${expira_en || null}, ${minimo_compra || 0}, ${nombre || null}, ${descripcion || null}, ${req.params.id})
+      RETURNING *`
+    res.json(rows[0])
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// PATCH /api/negocios/:id/cupones/:cuponId
+router.patch("/:id/cupones/:cuponId", async (req, res) => {
+  try {
+    const { activo } = req.body
+    const rows = await sql`UPDATE cupones SET activo = ${activo} WHERE id = ${req.params.cuponId} AND negocio_id = ${req.params.id} RETURNING *`
+    res.json(rows[0])
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// DELETE /api/negocios/:id/cupones/:cuponId
+router.delete("/:id/cupones/:cuponId", async (req, res) => {
+  try {
+    await sql`DELETE FROM cupones WHERE id = ${req.params.cuponId} AND negocio_id = ${req.params.id}`
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
 export default router;

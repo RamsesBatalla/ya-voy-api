@@ -73,7 +73,7 @@ const genDos = () => {
 
 router.post("/cupones/validar", async (req, res) => {
   try {
-    const { codigo, total } = req.body
+    const { codigo, total, negocioId } = req.body
     if (!codigo) return res.status(400).json({ error: "Codigo requerido" })
     const rows = await sql`SELECT * FROM cupones WHERE codigo = ${codigo.toUpperCase().trim()} AND activo = true`
     if (!rows.length) return res.status(404).json({ error: "Cupon invalido o no existe" })
@@ -82,10 +82,14 @@ router.post("/cupones/validar", async (req, res) => {
       return res.status(400).json({ error: "Este cupon ha expirado" })
     if (cupon.usos_max && cupon.usos_actual >= cupon.usos_max)
       return res.status(400).json({ error: "Este cupon ya no tiene usos disponibles" })
+    if (cupon.negocio_id && negocioId && cupon.negocio_id !== negocioId)
+      return res.status(400).json({ error: "Este cupon no aplica para este restaurante" })
+    if (cupon.minimo_compra && Number(total) < Number(cupon.minimo_compra))
+      return res.status(400).json({ error: "Compra minima para este cupon: $" + Number(cupon.minimo_compra).toFixed(2) })
     const descuento = cupon.tipo === "porcentaje"
       ? Math.min(Number(total) * Number(cupon.valor) / 100, Number(total))
       : Math.min(Number(cupon.valor), Number(total))
-    res.json({ valido: true, descuento: Number(descuento.toFixed(2)), tipo: cupon.tipo, valor: Number(cupon.valor), codigo: cupon.codigo })
+    res.json({ valido: true, descuento: Number(descuento.toFixed(2)), tipo: cupon.tipo, valor: Number(cupon.valor), codigo: cupon.codigo, nombre: cupon.nombre, descripcion: cupon.descripcion })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
