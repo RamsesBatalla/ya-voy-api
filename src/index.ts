@@ -44,6 +44,7 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req,
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get("/api/mantenimiento", async (_req, res) => { try { const { sql } = await import("./db"); const r = await sql`SELECT valor FROM app_config WHERE clave = 'mantenimiento'`; res.json({ mantenimiento: r[0]?.valor === 'true' }); } catch { res.json({ mantenimiento: false }); } });
 app.use("/api/stripe",        stripeRouter);
 app.use("/api/bloqueos",      bloqueosRouter);
 app.use("/api/retiros",       retirosRouter);
