@@ -101,6 +101,8 @@ router.post("/pedidos", async (req, res) => {
     const palabrasEntrega = genTres(codEntrega);
     const palabrasRestaurante = genTres(codRest);
     const envio = costoEnvio ?? 35;
+    const activos = await sql`SELECT id FROM pedidos WHERE cliente_id = ${clienteId} AND status NOT IN ('entregado','cancelado') LIMIT 1`
+    if (activos.length) return res.status(409).json({ error: "Ya tienes un pedido activo. Espera a que sea entregado o cancelado antes de pedir de nuevo." })
     const rows = await sql`
       INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado)
 VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${envio}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null})
