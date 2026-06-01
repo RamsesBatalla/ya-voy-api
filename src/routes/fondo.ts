@@ -3,8 +3,15 @@ import { sql } from "../db"
 
 const router = Router()
 
-const COMISION_PCT = 0.12   // 12% Batalla Group del total
-const FONDO_PCT    = 0.15   // 15% de esa comisión al fondo
+const getConfig = async () => {
+  const rows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','fondo_pct')`
+  const cfg: Record<string,number> = {}
+  rows.forEach((r: any) => { cfg[r.clave] = parseFloat(r.valor) })
+  return {
+    comisionPct: (cfg.comision_pct ?? 18) / 100,
+    fondoPct:    (cfg.fondo_pct    ?? 20) / 100,
+  }
+}
 
 // Crear tablas si no existen
 const initTables = async () => {
@@ -23,14 +30,15 @@ initTables().catch(e => console.error("Error init fondo:", e.message))
 // GET /api/fondo/resumen — saldo neto + fondo
 router.get("/resumen", async (_req, res) => {
   try {
+    const cfg = await getConfig()
     // Total comisiones acumuladas (pedidos entregados)
     const comRows = await sql`
-      SELECT COALESCE(SUM(ROUND((total * ${COMISION_PCT})::numeric, 2)), 0) as total
+      SELECT COALESCE(SUM(ROUND((total * ${cfg.comisionPct})::numeric, 2)), 0) as total
       FROM pedidos WHERE status = 'entregado'`
     const totalComision = Number(comRows[0]?.total || 0)
 
-    // Fondo = 15% de las comisiones acumuladas
-    const fondoAcumulado = Math.round(totalComision * FONDO_PCT * 100) / 100
+    // Fondo = fondo_pct% de las comisiones acumuladas
+    const fondoAcumulado = Math.round(totalComision * cfg.fondoPct * 100) / 100
     // Ganancias netas = comision - fondo
     const gananciasNetas = Math.round((totalComision - fondoAcumulado) * 100) / 100
 
