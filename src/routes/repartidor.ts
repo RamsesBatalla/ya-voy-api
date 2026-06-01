@@ -168,4 +168,12 @@ router.get("/:userId/ubicacion", async (req, res) => {
     res.json(rows[0] || { lat_actual: null, lng_actual: null })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
+// GET /api/repartidores/disponibles/count
+router.get("/disponibles/count", async (_req, res) => {
+  try {
+    const rows = await sql`SELECT COUNT(*) as total, array_agg(nombre) as nombres FROM repartidores WHERE en_linea = true AND status = 'aprobado'`
+    res.json({ total: Number(rows[0].total), nombres: rows[0].nombres || [] })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 export default router
