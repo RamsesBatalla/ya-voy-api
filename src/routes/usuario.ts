@@ -174,4 +174,21 @@ router.patch("/pedidos/:id/rating", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/usuario/perfil/:userId
+router.get("/perfil/:userId", async (req, res) => {
+  try {
+    const rows = await sql`SELECT foto_perfil FROM usuarios WHERE id = ${req.params.userId}`
+    res.json(rows[0] || {})
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// PATCH /api/usuario/perfil/:userId
+router.patch("/perfil/:userId", async (req, res) => {
+  try {
+    const { foto_perfil } = req.body
+    await sql`UPDATE usuarios SET foto_perfil = ${foto_perfil} WHERE id = ${req.params.userId}`
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 export default router;
