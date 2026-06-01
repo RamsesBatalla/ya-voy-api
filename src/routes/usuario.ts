@@ -102,8 +102,8 @@ router.post("/pedidos", async (req, res) => {
     const palabrasRestaurante = genTres(codRest);
     const envio = costoEnvio ?? 35;
     const rows = await sql`
-      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega)
-      VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${envio}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null})
+      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado)
+VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${envio}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null})
       RETURNING *
     `;
     if (cuponCodigo) {
