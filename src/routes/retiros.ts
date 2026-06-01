@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
+import { sendPushToUser } from "../firebase"
 
 const router = Router()
 
@@ -108,7 +109,14 @@ router.patch("/:id", async (req, res) => {
       UPDATE retiros SET status = ${status}, nota_admin = ${nota_admin || ""},
         fecha_pago = ${fechaPago}
       WHERE id = ${req.params.id} RETURNING *`
-    res.json(rows[0])
+    const retiro = rows[0]
+    if (status === "pagado" || status === "rechazado") {
+      const titulo = status === "pagado" ? "Retiro aprobado \u2705" : "Retiro rechazado \u274c"
+      const monto = Number(retiro.monto).toFixed(2)
+      const cuerpo = status === "pagado" ? `Tu retiro de $${monto} MXN fue aprobado y pagado` : `Tu retiro de $${monto} MXN fue rechazado${nota_admin ? ": " + nota_admin : ""}`
+      sendPushToUser(sql, retiro.actor_id, titulo, cuerpo).catch(() => {})
+    }
+    res.json(retiro)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
