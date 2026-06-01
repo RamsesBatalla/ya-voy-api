@@ -103,6 +103,10 @@ router.post("/pedidos", async (req, res) => {
     const envio = costoEnvio ?? 35;
     const activos = await sql`SELECT id FROM pedidos WHERE cliente_id = ${clienteId} AND status NOT IN ('entregado','cancelado') LIMIT 1`
     if (activos.length) return res.status(409).json({ error: "Ya tienes un pedido activo. Espera a que sea entregado o cancelado antes de pedir de nuevo." })
+    const cfgLimite = await sql`SELECT valor FROM app_config WHERE clave = 'max_pedidos_simultaneos'`
+    const maxPedidos = cfgLimite.length ? parseInt(cfgLimite[0].valor) : 10
+    const pedidosRest = await sql`SELECT COUNT(*) as cnt FROM pedidos WHERE negocio_id = ${negocioId} AND status NOT IN ('entregado','cancelado')`
+    if (parseInt(pedidosRest[0].cnt) >= maxPedidos) return res.status(429).json({ error: "Este restaurante tiene demasiados pedidos activos en este momento. Intenta en unos minutos." })
     const rows = await sql`
       INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, direccion_entrega, notas, metodo_pago, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado)
 VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${total}, ${envio}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null})
