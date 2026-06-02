@@ -24,7 +24,8 @@ router.get("/:pedidoId", async (req, res) => {
     const pedidos = await sql`SELECT status FROM pedidos WHERE id = ${req.params.pedidoId}`
     if (!pedidos.length) return res.status(404).json({ error: "Pedido no encontrado" })
     const rows = await sql`
-      SELECT * FROM mensajes WHERE pedido_id = ${req.params.pedidoId}
+      SELECT id, pedido_id, emisor_id as remitente_id, rol_emisor as remitente_tipo, mensaje as texto, leido, creado_en
+      FROM mensajes WHERE pedido_id = ${req.params.pedidoId}
       ORDER BY creado_en ASC LIMIT 100`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
@@ -46,9 +47,9 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Chat solo disponible cuando el pedido esta en camino" })
 
     const rows = await sql`
-      INSERT INTO mensajes (pedido_id, remitente_id, remitente_tipo, texto)
+      INSERT INTO mensajes (pedido_id, emisor_id, rol_emisor, mensaje)
       VALUES (${pedidoId}, ${remitenteId}, ${remitenteTipo}, ${texto.trim()})
-      RETURNING *`
+      RETURNING id, pedido_id, emisor_id as remitente_id, rol_emisor as remitente_tipo, mensaje as texto, leido, creado_en`
     res.json(rows[0])
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -58,7 +59,7 @@ router.patch("/:pedidoId/leidos", async (req, res) => {
   try {
     const { lectorTipo } = req.body // "usuario" o "repartidor" — marca como leídos los del otro
     const otroTipo = lectorTipo === "usuario" ? "repartidor" : "usuario"
-    await sql`UPDATE mensajes SET leido = true WHERE pedido_id = ${req.params.pedidoId} AND remitente_tipo = ${otroTipo}`
+    await sql`UPDATE mensajes SET leido = true WHERE pedido_id = ${req.params.pedidoId} AND rol_emisor = ${otroTipo}`
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
