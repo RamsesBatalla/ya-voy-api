@@ -8,7 +8,7 @@ const CLOUDINARY_SECRET = process.env.CLOUDINARY_API_SECRET || ""
 
 async function deleteCloudinaryImage(url: string) {
   try {
-    const match = url.match(/\/([^\/]+)\.[a-z]+$/)
+    const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-z]+$/)
     if (!match) return
     const publicId = match[1]
     const timestamp = Math.floor(Date.now() / 1000)
@@ -84,7 +84,7 @@ export function initCronJobs() {
 
       for (const p of viejos) {
         await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW() WHERE id = ${p.id}`
-        await sendPushToUser(sql, p.cliente_id, "Tu pedido fue cancelado", "No encontramos un repartidor disponible. Intenta de nuevo en unos minutos.", { tipo: "pedido_cancelado", pedido_id: String(p.id) }).catch(() => {})
+        await sendPushToUser(sql, p.cliente_id, "Tu pedido fue cancelado", "El restaurante no respondio tu pedido a tiempo. Intenta de nuevo.", { tipo: "pedido_cancelado", pedido_id: String(p.id) }).catch(() => {})
         const nuevos = (Number(p.incidentes_count) || 0) + 1
         if (nuevos >= 3) {
           await sql`UPDATE viveres SET incidentes_count = ${nuevos}, suspendido = true, bloqueado = true, razon_bloqueo = '3 pedidos abandonados — suspendido automaticamente' WHERE id = ${p.negocio_id}`

@@ -33,6 +33,9 @@ export function initWebSocket(server: Server) {
           }
         } catch {}
       })
+      ws.on("close", () => {
+        ubicaciones.delete(repartidorId)
+      })
     } else {
       // Cliente suscribiendose a ubicacion del repartidor
       if (!suscriptores.has(repartidorId)) suscriptores.set(repartidorId, new Set())
