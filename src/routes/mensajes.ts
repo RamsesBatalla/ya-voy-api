@@ -32,7 +32,7 @@ router.get("/:pedidoId", async (req, res) => {
 })
 
 // POST /api/mensajes — enviar mensaje
-// body: { pedidoId, remitenteId, remitenteTipo: "usuario"|"repartidor", texto }
+// body: { pedidoId, remitenteId, remitenteTipo: "cliente"|"repartidor", texto }
 router.post("/", async (req, res) => {
   try {
     const { pedidoId, remitenteId, remitenteTipo, texto } = req.body
@@ -57,8 +57,8 @@ router.post("/", async (req, res) => {
 // PATCH /api/mensajes/:pedidoId/leidos — marcar como leídos
 router.patch("/:pedidoId/leidos", async (req, res) => {
   try {
-    const { lectorTipo } = req.body // "usuario" o "repartidor" — marca como leídos los del otro
-    const otroTipo = lectorTipo === "usuario" ? "repartidor" : "usuario"
+    const { lectorTipo } = req.body // "cliente" o "repartidor" — marca como leídos los del otro
+    const otroTipo = lectorTipo === "cliente" ? "repartidor" : "cliente"
     await sql`UPDATE mensajes SET leido = true WHERE pedido_id = ${req.params.pedidoId} AND rol_emisor = ${otroTipo}`
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
