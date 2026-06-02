@@ -52,14 +52,14 @@ router.get("/saldo/:tipo/:actorId", async (req, res) => {
 
     if (tipo === "repartidor") {
       const rows = await sql`
-        SELECT COALESCE(SUM(COALESCE(costo_envio, 35)), 0) as total
+        SELECT COALESCE(SUM(COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 35})), 0) as total
         FROM pedidos WHERE repartidor_id = ${actorId} AND status = 'entregado'`
       ganado = Number(rows[0]?.total || 0)
     } else if (tipo === "restaurante") {
       const negocio = await sql`SELECT id FROM viveres WHERE owner_id = ${actorId}`
       if (negocio.length) {
         const rows = await sql`
-          SELECT COALESCE(SUM((total - COALESCE(costo_envio,35)) * ${1 - comisionPct}), 0) as total
+          SELECT COALESCE(SUM((total - COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 35})) * ${1 - comisionPct}), 0) as total
           FROM pedidos WHERE negocio_id = ${negocio[0].id} AND status = 'entregado'`
         ganado = Number(rows[0]?.total || 0)
       }

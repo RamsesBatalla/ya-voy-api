@@ -54,7 +54,8 @@ router.post("/no-pago", async (req, res) => {
       await sql`INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon) VALUES ('usuario', ${pedido.cliente_id}, 'No pago en efectivo — reporte de repartidor')`.catch(() => {})
     }
 
-    const envio = 35
+    const cfgEnvio = await sql`SELECT valor FROM app_config WHERE clave = 'envio_minimo'`
+    const envio = Number(cfgEnvio[0]?.valor || 35)
     const rows = await sql`
       INSERT INTO contingencias (tipo, pedido_id, repartidor_id, cliente_id, negocio_id, descripcion, monto_fondo)
       VALUES ('no_pago', ${pedidoId}, ${repartidorId}, ${pedido.cliente_id || ""}, ${pedido.negocio_id || ""}, ${descripcion || "Cliente se nego a pagar en efectivo"}, ${envio})

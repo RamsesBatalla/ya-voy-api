@@ -1,10 +1,10 @@
-﻿import { Router, Request, Response } from "express";
+import { Router, Request, Response } from "express";
 import { getAuth } from "@clerk/express";
 import { sql } from "../db";
 
 const router = Router();
 
-// GET /api/config — público, lo leen las apps
+// GET /api/config — publico, lo leen las apps
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const rows = await sql`SELECT clave, valor FROM app_config`;
@@ -16,10 +16,13 @@ router.get("/", async (_req: Request, res: Response) => {
   }
 });
 
-// PUT /api/config/:clave — solo admins (dashboard)
+// PUT /api/config/:clave — solo admin (dashboard)
 router.put("/:clave", async (req: Request, res: Response) => {
   const { userId } = getAuth(req);
-  if (!userId) { res.status(401).json({ error: "No autorizado" }); return; }
+  const adminIds = (process.env.ADMIN_USER_IDS || "").split(",").map((s: string) => s.trim()).filter(Boolean);
+  if (!userId || (adminIds.length > 0 && !adminIds.includes(userId))) {
+    res.status(403).json({ error: "No autorizado" }); return;
+  }
   const { clave } = req.params;
   const { valor } = req.body;
   try {

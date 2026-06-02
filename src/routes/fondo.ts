@@ -68,8 +68,6 @@ router.post("/uso", async (req, res) => {
     if (!monto || monto <= 0) return res.status(400).json({ error: "Monto invalido" })
 
     // Verificar saldo disponible
-    const resumen = await fetch(`http://localhost:${process.env.PORT || 3001}/api/fondo/resumen`).then(r => r.json()).catch(() => null)
-    // Si no puede verificar, continúa de todos modos (el dashboard valida antes)
 
     const rows = await sql`
       INSERT INTO fondo_recuperacion (tipo, monto, descripcion)
