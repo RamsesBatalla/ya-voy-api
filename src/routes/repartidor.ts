@@ -77,6 +77,8 @@ router.patch("/pedidos/:id/aceptar", async (req, res) => {
 // PATCH /api/repartidor/pedidos/:id/status
 router.patch("/pedidos/:id/status", async (req, res) => {
   try {
+    const statusPermitidos = ["en_camino", "esperando_cliente", "entregado", "cancelado"]
+    if (!statusPermitidos.includes(req.body.status)) return res.status(400).json({ error: "Status invalido" })
     const rows = await sql`
       UPDATE pedidos SET status = ${req.body.status}, actualizado_en = NOW()
       WHERE id = ${req.params.id} RETURNING *
@@ -90,7 +92,7 @@ router.get("/:userId/pedidos", async (req, res) => {
   try {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre,
-             ROUND((p.total * 0.15)::numeric, 2) as comision
+             ROUND((p.total * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
       FROM pedidos p LEFT JOIN viveres v ON v.id = p.negocio_id
       WHERE p.repartidor_id = ${req.params.userId}
       ORDER BY p.creado_en DESC LIMIT 30
@@ -171,7 +173,7 @@ router.get("/:userId/ubicacion", async (req, res) => {
 // GET /api/repartidores/disponibles/count
 router.get("/disponibles/count", async (_req, res) => {
   try {
-    const rows = await sql`SELECT COUNT(*) as total, array_agg(nombre) as nombres FROM repartidores WHERE en_linea = true AND status = 'aprobado'`
+    const rows = await sql`SELECT COUNT(*) as total, array_agg(u.nombre) as nombres FROM repartidores r LEFT JOIN usuarios u ON u.id = r.id WHERE r.status = 'online'`
     res.json({ total: Number(rows[0].total), nombres: rows[0].nombres || [] })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

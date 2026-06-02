@@ -130,7 +130,7 @@ router.post("/connect/onboarding", async (req, res) => {
       }
     }
 
-    const origin = process.env.FRONTEND_RESTAURANTE || "http://localhost:5173"
+    const origin = tipo === "repartidor" ? (process.env.FRONTEND_REPARTIDOR || "http://localhost:5175") : (process.env.FRONTEND_RESTAURANTE || "http://localhost:5173")
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
       refresh_url: origin + "/stripe-connect-refresh",
@@ -179,7 +179,7 @@ router.post("/webhook", async (req, res) => {
   if (event.type === "payment_intent.succeeded") {
     const pi = event.data.object as any
     const repartidorId = pi.metadata?.repartidorId
-    const costoEnvio = parseFloat(pi.metadata?.costoEnvio || "35")
+    const costoEnvio = Math.max(35, parseFloat(pi.metadata?.costoEnvio || "35") || 35)
 
     if (repartidorId) {
       try {
