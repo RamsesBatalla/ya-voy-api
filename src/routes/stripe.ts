@@ -131,11 +131,14 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
       }
     }
 
-    const origin = tipo === "repartidor" ? (process.env.FRONTEND_REPARTIDOR || "http://localhost:5175") : (process.env.FRONTEND_RESTAURANTE || "http://localhost:5173")
+    // return_url y refresh_url deben ser URLs HTTPS alcanzables por Stripe.
+    // En apps nativas (Capacitor), browserFinished detecta el cierre y re-verifica el status.
+    // Usamos la URL de la API propia como fallback universal.
+    const baseUrl = process.env.API_PUBLIC_URL || "https://batallagroup-tech.github.io/ya-voy"
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: origin + "/stripe-connect-refresh",
-      return_url: origin + "/stripe-connect-return",
+      refresh_url: baseUrl + "/stripe-connect-refresh",
+      return_url:  baseUrl + "/stripe-connect-return",
       type: "account_onboarding",
     })
 
