@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { sql } from "../db";
 import { notificarCliente } from "../websocket";
+import { requireAuth } from "../middleware/auth";
+import { getAuth } from "@clerk/express";
 
 const router = Router();
 
@@ -39,7 +41,9 @@ router.get("/perfil/:userId", async (req, res) => {
 });
 
 // PATCH /api/repartidor/:userId/status (online/offline)
-router.patch("/:userId/status", async (req, res) => {
+router.patch("/:userId/status", requireAuth, async (req, res) => {
+  const { userId: authId } = getAuth(req);
+  if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" });
   try {
     const nuevoStatus = req.body.en_linea ? "online" : "offline";
     await sql`UPDATE repartidores SET status = ${nuevoStatus} WHERE id = ${req.params.userId}`;
@@ -62,7 +66,7 @@ router.get("/pedidos/disponibles", async (_req, res) => {
 });
 
 // PATCH /api/repartidor/pedidos/:id/aceptar
-router.patch("/pedidos/:id/aceptar", async (req, res) => {
+router.patch("/pedidos/:id/aceptar", requireAuth, async (req, res) => {
   try {
     const { repartidorId } = req.body;
     const rows = await sql`
@@ -78,7 +82,7 @@ router.patch("/pedidos/:id/aceptar", async (req, res) => {
 });
 
 // PATCH /api/repartidor/pedidos/:id/status
-router.patch("/pedidos/:id/status", async (req, res) => {
+router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
   try {
     const statusPermitidos = ["en_camino", "esperando_cliente", "entregado", "cancelado"]
     if (!statusPermitidos.includes(req.body.status)) return res.status(400).json({ error: "Status invalido" })
@@ -113,7 +117,7 @@ function distKm(lat1: number, lng1: number, lat2: number, lng2: number) {
 }
 
 // Marcar en espera del cliente (solo si está en la ubicación)
-router.patch("/pedidos/:id/esperando", async (req, res) => {
+router.patch("/pedidos/:id/esperando", requireAuth, async (req, res) => {
   try {
     const { lat, lng } = req.body;
     const rows = await sql`SELECT lat_entrega, lng_entrega, status FROM pedidos WHERE id = ${req.params.id}`;
@@ -131,7 +135,7 @@ router.patch("/pedidos/:id/esperando", async (req, res) => {
 });
 
 // Auto-expirar espera (llamado desde cliente cuando el timer expira)
-router.patch("/pedidos/:id/expirar-espera", async (req, res) => {
+router.patch("/pedidos/:id/expirar-espera", requireAuth, async (req, res) => {
   try {
     const rows = await sql`SELECT status, esperando_desde FROM pedidos WHERE id = ${req.params.id}`;
     if (!rows.length || rows[0].status !== "esperando_cliente") return res.status(400).json({ error: "No aplica" });
