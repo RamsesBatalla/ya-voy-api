@@ -46,29 +46,33 @@ app.use(helmet({
 // ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({ origin: origins, credentials: true }));
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
-// Global: 300 req / 15 min por IP
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
-}));
+// ── Rate limiting (solo en producción) ───────────────────────────────────────
+const isDev = process.env.NODE_ENV !== "production";
 
-// Endpoints sensibles: límite más estricto
-const limitEstricto = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
-});
+if (!isDev) {
+  // Global: 300 req / 15 min por IP
+  app.use(rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
+  }));
 
-app.use("/api/stripe/payment-intent", limitEstricto);
-app.use("/api/stripe/setup-intent",   limitEstricto);
-app.use("/api/retiros",               limitEstricto);
-app.use("/api/soporte",               limitEstricto);
+  // Endpoints sensibles: 30 req / 15 min
+  const limitEstricto = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
+  });
+
+  app.use("/api/stripe/payment-intent", limitEstricto);
+  app.use("/api/stripe/setup-intent",   limitEstricto);
+  app.use("/api/retiros",               limitEstricto);
+  app.use("/api/soporte",               limitEstricto);
+}
 
 // ── Webhook Stripe (body crudo, antes del JSON parser) ────────────────────────
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res, next) => {
