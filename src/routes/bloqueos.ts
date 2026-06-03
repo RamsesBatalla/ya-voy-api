@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
+import { requireAdmin } from "../middleware/auth"
 
 const router = Router()
 
@@ -26,7 +27,7 @@ const initTables = async () => {
 initTables().catch(e => console.error("Error init bloqueos:", e.message))
 
 // GET /api/bloqueos — lista todos los bloqueados
-router.get("/", async (_req, res) => {
+router.get("/", requireAdmin, async (_req, res) => {
   try {
     const [usuarios, repartidores, negocios] = await Promise.all([
       sql`SELECT id, email, nombre, razon_bloqueo, bloqueado_en FROM usuarios WHERE bloqueado = true`,
@@ -38,7 +39,7 @@ router.get("/", async (_req, res) => {
 })
 
 // GET /api/bloqueos/historial
-router.get("/historial", async (_req, res) => {
+router.get("/historial", requireAdmin, async (_req, res) => {
   try {
     const rows = await sql`SELECT * FROM bloqueos_historial ORDER BY fecha DESC LIMIT 200`
     res.json(rows)
@@ -47,7 +48,7 @@ router.get("/historial", async (_req, res) => {
 
 // POST /api/bloqueos — bloquear
 // body: { tipo: "usuario"|"repartidor"|"negocio", actorId, razon }
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
   try {
     const { tipo, actorId, razon } = req.body
     if (!tipo || !actorId) return res.status(400).json({ error: "tipo y actorId requeridos" })
@@ -69,7 +70,7 @@ router.post("/", async (req, res) => {
 
 // DELETE /api/bloqueos — desbloquear
 // body: { tipo, actorId, nota }
-router.delete("/", async (req, res) => {
+router.delete("/", requireAdmin, async (req, res) => {
   try {
     const { tipo, actorId, nota } = req.body
     if (!tipo || !actorId) return res.status(400).json({ error: "tipo y actorId requeridos" })

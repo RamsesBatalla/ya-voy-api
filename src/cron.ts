@@ -1,8 +1,10 @@
 import cron from "node-cron"
 import { sql } from "./db"
 import { sendPushToUser } from "./firebase"
+import { notificarCliente } from "./websocket"
 
-const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME || "dpihs4gtg"
+const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME
+if (!CLOUDINARY_CLOUD) throw new Error("CLOUDINARY_CLOUD_NAME no definido en variables de entorno")
 const CLOUDINARY_KEY   = process.env.CLOUDINARY_API_KEY || ""
 const CLOUDINARY_SECRET = process.env.CLOUDINARY_API_SECRET || ""
 
@@ -84,6 +86,7 @@ export function initCronJobs() {
 
       for (const p of viejos) {
         await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW() WHERE id = ${p.id}`
+        notificarCliente(p.cliente_id, "pedido_update", { id: p.id, status: "cancelado" })
         await sendPushToUser(sql, p.cliente_id, "Tu pedido fue cancelado", "El restaurante no respondio tu pedido a tiempo. Intenta de nuevo.", { tipo: "pedido_cancelado", pedido_id: String(p.id) }).catch(() => {})
         const nuevos = (Number(p.incidentes_count) || 0) + 1
         if (nuevos >= 3) {

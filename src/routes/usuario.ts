@@ -396,7 +396,7 @@ router.patch("/pedidos/:id/expirar-espera", async (req, res) => {
     const rows = await sql`SELECT status FROM pedidos WHERE id = ${req.params.id}`
     if (!rows.length) return res.status(404).json({ error: "Pedido no encontrado" })
     if (rows[0].status !== "esperando_cliente") return res.json({ ok: true })
-    await sql`UPDATE pedidos SET status = "entregado", entregado_en = NOW() WHERE id = ${req.params.id}`
+    await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW() WHERE id = ${req.params.id}`
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

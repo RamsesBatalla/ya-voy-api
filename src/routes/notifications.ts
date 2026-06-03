@@ -2,7 +2,6 @@ import { Router } from "express"
 import { sql } from "../db"
 import { getAuth } from "@clerk/express"
 import { sendPushToUser } from "../firebase"
-
 const router = Router()
 
 // Guardar token FCM del dispositivo
@@ -20,9 +19,12 @@ router.post("/token", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/notificaciones/push — enviar push a un usuario por userId
+// POST /api/notificaciones/push - solo admins pueden enviar push
 router.post("/push", async (req, res) => {
   try {
+    const { userId: adminId } = getAuth(req)
+    const ADMIN_IDS = (process.env.ADMIN_USER_IDS || "").split(",")
+    if (!adminId || !ADMIN_IDS.includes(adminId)) return res.status(403).json({ error: "No autorizado" })
     const { userId, titulo, cuerpo, data } = req.body
     if (!userId || !titulo || !cuerpo) return res.status(400).json({ error: "userId, titulo y cuerpo requeridos" })
     await sendPushToUser(sql, userId, titulo, cuerpo, data || {})

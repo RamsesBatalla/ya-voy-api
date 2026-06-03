@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
+import { notificarCliente } from "../websocket"
 
 const router = Router()
 
@@ -30,6 +31,8 @@ router.patch("/pedidos/:id/status", async (req, res) => {
     const pedido = rows[0]
     if (!pedido) return res.status(404).json({ error: "Pedido no encontrado" })
     res.json(pedido)
+
+    if (pedido.cliente_id) notificarCliente(pedido.cliente_id, "pedido_update", pedido)
 
     const negocio = await sql`SELECT owner_id, nombre FROM viveres WHERE id = ${pedido.negocio_id}`
     const ownerID = negocio[0]?.owner_id
@@ -65,6 +68,7 @@ router.patch("/pedidos/:id/cancelar", async (req, res) => {
       return res.status(400).json({ error: "No se puede cancelar en este punto" })
     await sql`UPDATE pedidos SET status = ${"cancelado"}, cancelado_en = NOW() WHERE id = ${req.params.id}`
     if (cliente_id) {
+      notificarCliente(cliente_id, "pedido_update", { id: req.params.id, status: "cancelado" })
       await sendPushToUser(sql, cliente_id, "Pedido cancelado", "El restaurante cancelo tu pedido", { pedidoId: req.params.id })
     }
     res.json({ ok: true })

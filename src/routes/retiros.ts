@@ -1,6 +1,8 @@
 import { Router } from "express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
+import { requireAuth, requireAdmin } from "../middleware/auth"
+import { getAuth } from "@clerk/express"
 
 const router = Router()
 
@@ -21,16 +23,18 @@ const initTable = async () => {
 }
 initTable().catch(e => console.error("Error init retiros:", e.message))
 
-// GET /api/retiros — todos (dashboard)
-router.get("/", async (_req, res) => {
+// GET /api/retiros — todos (dashboard admin)
+router.get("/", requireAdmin, async (_req, res) => {
   try {
     const rows = await sql`SELECT * FROM retiros ORDER BY fecha_solicitud DESC LIMIT 200`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// GET /api/retiros/:tipo/:actorId — retiros de un actor
-router.get("/:tipo/:actorId", async (req, res) => {
+// GET /api/retiros/:tipo/:actorId — retiros propios (IDOR: verifica que sea el mismo usuario)
+router.get("/:tipo/:actorId", requireAuth, async (req, res) => {
+  const { userId } = getAuth(req)
+  if (userId !== req.params.actorId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const rows = await sql`
       SELECT * FROM retiros
@@ -40,8 +44,10 @@ router.get("/:tipo/:actorId", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// GET /api/retiros/saldo/:tipo/:actorId — saldo disponible
-router.get("/saldo/:tipo/:actorId", async (req, res) => {
+// GET /api/retiros/saldo/:tipo/:actorId — saldo propio (IDOR: verifica mismo usuario)
+router.get("/saldo/:tipo/:actorId", requireAuth, async (req, res) => {
+  const { userId } = getAuth(req)
+  if (userId !== req.params.actorId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const { tipo, actorId } = req.params
     const cfg = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','envio_minimo')`
@@ -75,7 +81,7 @@ router.get("/saldo/:tipo/:actorId", async (req, res) => {
 })
 
 // POST /api/retiros — solicitar retiro
-router.post("/", async (req, res) => {
+router.post("/", requireAuth, async (req, res) => {
   try {
     const { tipo_actor, actor_id, actor_nombre, monto } = req.body
     if (!tipo_actor || !actor_id || !monto || monto <= 0)
@@ -100,8 +106,8 @@ router.post("/", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// PATCH /api/retiros/:id — aprobar/rechazar (dashboard)
-router.patch("/:id", async (req, res) => {
+// PATCH /api/retiros/:id — aprobar/rechazar (solo admin)
+router.patch("/:id", requireAdmin, async (req, res) => {
   try {
     const { status, nota_admin } = req.body
     const fechaPago = status === "pagado" ? new Date().toISOString() : null

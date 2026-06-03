@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { neon } from "@neondatabase/serverless";
+import { sql } from "../db";
+import { requireAdmin } from "../middleware/auth";
 
 const router = Router();
-const sql = neon(process.env.DATABASE_URL!);
 
 // Crear tabla si no existe
 async function ensureTable() {
@@ -38,16 +38,16 @@ router.post("/", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/soporte — listar todos (dashboard)
-router.get("/", async (_req, res) => {
+// GET /api/soporte — listar todos (solo admin)
+router.get("/", requireAdmin, async (_req, res) => {
   try {
     const reportes = await sql`SELECT * FROM reportes_soporte ORDER BY creado_en DESC LIMIT 200`;
     res.json(reportes);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// PATCH /api/soporte/:id — actualizar status desde dashboard
-router.patch("/:id", async (req, res) => {
+// PATCH /api/soporte/:id — actualizar status (solo admin)
+router.patch("/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, nota_admin } = req.body;

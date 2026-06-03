@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { sql } from "../db";
+import { notificarCliente } from "../websocket";
 
 const router = Router();
 
@@ -70,7 +71,9 @@ router.patch("/pedidos/:id/aceptar", async (req, res) => {
       RETURNING *
     `;
     if (!rows.length) return res.status(409).json({ error: "Pedido ya fue tomado" });
-    res.json(rows[0]);
+    const pedidoAceptado = rows[0];
+    res.json(pedidoAceptado);
+    if (pedidoAceptado.cliente_id) notificarCliente(pedidoAceptado.cliente_id, "pedido_update", pedidoAceptado);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -84,6 +87,7 @@ router.patch("/pedidos/:id/status", async (req, res) => {
       WHERE id = ${req.params.id} RETURNING *
     `;
     res.json(rows[0]);
+    if (rows[0]?.cliente_id) notificarCliente(rows[0].cliente_id, "pedido_update", rows[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -120,7 +124,8 @@ router.patch("/pedidos/:id/esperando", async (req, res) => {
       const dist = distKm(Number(lat), Number(lng), Number(p.lat_entrega), Number(p.lng_entrega));
       if (dist > 0.3) return res.status(400).json({ error: "Debes estar a menos de 300m del cliente" });
     }
-    await sql`UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW() WHERE id = ${req.params.id}`;
+    const updated = await sql`UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW() WHERE id = ${req.params.id} RETURNING cliente_id`;
+    if (updated[0]?.cliente_id) notificarCliente(updated[0].cliente_id, "pedido_update", { id: req.params.id, status: "esperando_cliente", esperando_desde: new Date().toISOString() });
     res.json({ ok: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });

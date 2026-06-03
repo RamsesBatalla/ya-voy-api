@@ -1,6 +1,7 @@
 import { Router } from "express"
 import Stripe from "stripe"
 import { sql } from "../db"
+import { requireAuth } from "../middleware/auth"
 
 const router = Router()
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
@@ -42,7 +43,7 @@ router.post("/calcular-envio", async (req, res) => {
 })
 
 // ─── PAYMENT INTENT ────────────────────────────────────────────────────────
-router.post("/payment-intent", async (req, res) => {
+router.post("/payment-intent", requireAuth, async (req, res) => {
   try {
     const { amount, currency = "mxn", negocioId, repartidorId, costoEnvio, metadata = {} } = req.body
     if (!amount || amount < 10) return res.status(400).json({ error: "Monto invalido" })
@@ -95,7 +96,7 @@ router.get("/payment-intent/:id", async (req, res) => {
 })
 
 // ─── ONBOARDING CONNECT ────────────────────────────────────────────────────
-router.post("/connect/onboarding", async (req, res) => {
+router.post("/connect/onboarding", requireAuth, async (req, res) => {
   try {
     const { tipo, actorId, email, nombre } = req.body
     if (!tipo || !actorId) return res.status(400).json({ error: "tipo y actorId requeridos" })
@@ -205,7 +206,7 @@ router.post("/webhook", async (req, res) => {
 
 // ─── CUSTOMER + TARJETAS GUARDADAS ────────────────────────────────────────
 
-router.post("/customer", async (req, res) => {
+router.post("/customer", requireAuth, async (req, res) => {
   try {
     const { userId, email, nombre } = req.body
     if (!userId) return res.status(400).json({ error: "userId requerido" })
@@ -221,7 +222,7 @@ router.post("/customer", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.post("/setup-intent", async (req, res) => {
+router.post("/setup-intent", requireAuth, async (req, res) => {
   try {
     const { userId } = req.body
     if (!userId) return res.status(400).json({ error: "userId requerido" })
@@ -233,7 +234,7 @@ router.post("/setup-intent", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.get("/payment-methods/:userId", async (req, res) => {
+router.get("/payment-methods/:userId", requireAuth, async (req, res) => {
   try {
     const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${req.params.userId}`
     const customerId = rows[0]?.stripe_customer_id
@@ -247,7 +248,7 @@ router.get("/payment-methods/:userId", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.delete("/payment-methods/:pmId", async (req, res) => {
+router.delete("/payment-methods/:pmId", requireAuth, async (req, res) => {
   try {
     await stripe.paymentMethods.detach(req.params.pmId)
     res.json({ ok: true })

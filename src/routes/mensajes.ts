@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
+import { requireAuth } from "../middleware/auth"
 
 const router = Router()
 
@@ -7,9 +8,9 @@ const initTable = async () => {
   await sql`CREATE TABLE IF NOT EXISTS mensajes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pedido_id TEXT NOT NULL,
-    remitente_id TEXT NOT NULL,
-    remitente_tipo TEXT NOT NULL,
-    texto TEXT NOT NULL,
+    emisor_id TEXT NOT NULL,
+    rol_emisor TEXT NOT NULL,
+    mensaje TEXT NOT NULL,
     leido BOOLEAN DEFAULT false,
     creado_en TIMESTAMPTZ DEFAULT NOW()
   )`
@@ -18,7 +19,7 @@ const initTable = async () => {
 initTable().catch(e => console.error("Error init mensajes:", e.message))
 
 // GET /api/mensajes/:pedidoId — obtener mensajes de un pedido
-router.get("/:pedidoId", async (req, res) => {
+router.get("/:pedidoId", requireAuth, async (req, res) => {
   try {
     // Solo permitir chat en pedidos activos
     const pedidos = await sql`SELECT status FROM pedidos WHERE id = ${req.params.pedidoId}`
@@ -33,7 +34,7 @@ router.get("/:pedidoId", async (req, res) => {
 
 // POST /api/mensajes — enviar mensaje
 // body: { pedidoId, remitenteId, remitenteTipo: "cliente"|"repartidor", texto }
-router.post("/", async (req, res) => {
+router.post("/", requireAuth, async (req, res) => {
   try {
     const { pedidoId, remitenteId, remitenteTipo, texto } = req.body
     if (!pedidoId || !remitenteId || !remitenteTipo || !texto?.trim())
@@ -55,7 +56,7 @@ router.post("/", async (req, res) => {
 })
 
 // PATCH /api/mensajes/:pedidoId/leidos — marcar como leídos
-router.patch("/:pedidoId/leidos", async (req, res) => {
+router.patch("/:pedidoId/leidos", requireAuth, async (req, res) => {
   try {
     const { lectorTipo } = req.body // "cliente" o "repartidor" — marca como leídos los del otro
     const otroTipo = lectorTipo === "cliente" ? "repartidor" : "cliente"
@@ -65,3 +66,4 @@ router.patch("/:pedidoId/leidos", async (req, res) => {
 })
 
 export default router
+

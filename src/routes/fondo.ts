@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
+import { requireAdmin } from "../middleware/auth"
 
 const router = Router()
 
@@ -28,7 +29,7 @@ const initTables = async () => {
 initTables().catch(e => console.error("Error init fondo:", e.message))
 
 // GET /api/fondo/resumen — saldo neto + fondo
-router.get("/resumen", async (_req, res) => {
+router.get("/resumen", requireAdmin, async (_req, res) => {
   try {
     const cfg = await getConfig()
     // Total comisiones acumuladas (pedidos entregados)
@@ -53,22 +54,29 @@ router.get("/resumen", async (_req, res) => {
 })
 
 // GET /api/fondo/log — historial de movimientos
-router.get("/log", async (_req, res) => {
+router.get("/log", requireAdmin, async (_req, res) => {
   try {
     const rows = await sql`SELECT * FROM fondo_recuperacion ORDER BY creado_en DESC LIMIT 200`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/fondo/uso — registrar uso del fondo (solo Ramses desde dashboard)
+// POST /api/fondo/uso — registrar uso del fondo (solo admin)
 // body: { monto, descripcion }
-router.post("/uso", async (req, res) => {
+router.post("/uso", requireAdmin, async (req, res) => {
   try {
     const { monto, descripcion } = req.body
     if (!monto || monto <= 0) return res.status(400).json({ error: "Monto invalido" })
-
-    // Verificar saldo disponible
-
+    if (!monto || monto <= 0) return res.status(400).json({ error: "Monto invalido" })
+    // Verificar saldo disponible antes de registrar
+    const cfg = await getConfig()
+    const comRows = await sql`SELECT COALESCE(SUM(ROUND((total * ${cfg.comisionPct})::numeric, 2)), 0) as total FROM pedidos WHERE status = 'entregado'`
+    const totalComision = Number(comRows[0]?.total || 0)
+    const fondoAcumulado = Math.round(totalComision * cfg.fondoPct * 100) / 100
+    const usosRows = await sql`SELECT COALESCE(SUM(monto), 0) as total FROM fondo_recuperacion WHERE tipo = 'uso'`
+    const fondoUsado = Number(usosRows[0]?.total || 0)
+    const fondoDisponible = Math.max(0, fondoAcumulado - fondoUsado)
+    if (monto > fondoDisponible) return res.status(400).json({ error: "Saldo insuficiente en el fondo", fondoDisponible })
     const rows = await sql`
       INSERT INTO fondo_recuperacion (tipo, monto, descripcion)
       VALUES ('uso', ${monto}, ${descripcion || ""})
@@ -78,7 +86,7 @@ router.post("/uso", async (req, res) => {
 })
 
 // POST /api/fondo/ingreso — registrar ingreso manual (auditoría)
-router.post("/ingreso", async (req, res) => {
+router.post("/ingreso", requireAdmin, async (req, res) => {
   try {
     const { monto, descripcion, pedidoId } = req.body
     const rows = await sql`

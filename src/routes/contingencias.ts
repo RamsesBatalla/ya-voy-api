@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
+import { requireAuth, requireAdmin } from "../middleware/auth"
 
 const router = Router()
 
@@ -24,14 +25,14 @@ const initCols = async () => {
 }
 initCols().catch(e => console.error("Error init contingencias:", e.message))
 
-router.get("/", async (_req, res) => {
+router.get("/", requireAdmin, async (_req, res) => {
   try {
     const rows = await sql`SELECT * FROM contingencias ORDER BY creado_en DESC LIMIT 200`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.post("/no-pago", async (req, res) => {
+router.post("/no-pago", requireAuth, async (req, res) => {
   try {
     const { pedidoId, repartidorId, descripcion } = req.body
     if (!pedidoId || !repartidorId) return res.status(400).json({ error: "pedidoId y repartidorId requeridos" })
@@ -48,9 +49,10 @@ router.post("/no-pago", async (req, res) => {
 
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT false`
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS razon_bloqueo TEXT`
-    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado_en TIMESTAMPTZ`
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado_pendiente BOOLEAN DEFAULT false`
+  await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado_en TIMESTAMPTZ`
     if (pedido.cliente_id) {
-      await sql`UPDATE usuarios SET bloqueado = true, razon_bloqueo = 'No pago en efectivo — reporte de repartidor', bloqueado_en = NOW() WHERE id = ${pedido.cliente_id}`
+      await sql`UPDATE usuarios SET bloqueado_pendiente = true, razon_bloqueo = 'No pago en efectivo - pendiente revision admin', bloqueado_en = NOW() WHERE id = ${pedido.cliente_id}`
       await sql`INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon) VALUES ('usuario', ${pedido.cliente_id}, 'No pago en efectivo — reporte de repartidor')`.catch(() => {})
     }
 
@@ -68,7 +70,7 @@ router.post("/no-pago", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.post("/accidente", async (req, res) => {
+router.post("/accidente", requireAuth, async (req, res) => {
   try {
     const { pedidoId, repartidorId, fotoUrl, descripcion } = req.body
     if (!pedidoId || !repartidorId) return res.status(400).json({ error: "pedidoId y repartidorId requeridos" })
@@ -99,7 +101,7 @@ router.post("/accidente", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-router.patch("/:id/resolver", async (req, res) => {
+router.patch("/:id/resolver", requireAdmin, async (req, res) => {
   try {
     const { nota_admin } = req.body
     const rows = await sql`
