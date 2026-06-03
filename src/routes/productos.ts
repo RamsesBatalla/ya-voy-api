@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { sql } from '../db';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
+// GET es público — el usuario necesita ver el menú sin autenticarse
 router.get('/:negocioId/productos', async (req, res) => {
   try {
     const rows = await sql`SELECT * FROM productos WHERE negocio_id = ${req.params.negocioId} ORDER BY categoria, nombre`;
@@ -10,7 +12,7 @@ router.get('/:negocioId/productos', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/productos', async (req, res) => {
+router.post('/productos', requireAuth, async (req, res) => {
   try {
     const { negocio_id, nombre, descripcion, precio, categoria, disponible, destacado, imagen_url } = req.body;
     const rows = await sql`
@@ -21,7 +23,7 @@ router.post('/productos', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.put('/productos/:id', async (req, res) => {
+router.put('/productos/:id', requireAuth, async (req, res) => {
   try {
     const { nombre, descripcion, precio, categoria, disponible, destacado, imagen_url } = req.body;
     const rows = await sql`
@@ -32,7 +34,7 @@ router.put('/productos/:id', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete('/productos/:id', async (req, res) => {
+router.delete('/productos/:id', requireAuth, async (req, res) => {
   try {
     await sql`DELETE FROM productos WHERE id = ${req.params.id}`;
     res.json({ ok: true });
