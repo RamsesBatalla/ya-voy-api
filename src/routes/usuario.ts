@@ -1,7 +1,8 @@
 import { Router } from "express";
-
 import { sql } from "../db";
 import { sendPushToUser } from "../firebase";
+import { requireAuth } from "../middleware/auth";
+import { getAuth } from "@clerk/express";
 
 
 
@@ -377,8 +378,10 @@ router.patch("/perfil/:userId", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// DELETE /api/usuario/:userId — eliminar cuenta completa
-router.delete("/:userId", async (req, res) => {
+// DELETE /api/usuario/:userId — eliminar cuenta completa (solo el propio usuario)
+router.delete("/:userId", requireAuth, async (req, res) => {
+  const { userId: authId } = getAuth(req)
+  if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const { userId } = req.params
     await sql`DELETE FROM mensajes WHERE pedido_id IN (SELECT id FROM pedidos WHERE cliente_id = ${userId})`
