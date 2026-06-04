@@ -1,9 +1,17 @@
-import { Router } from "express"
+import { Router, Request, Response, NextFunction } from "express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
 import { requireAdmin } from "../middleware/auth"
 
 const router = Router()
+
+const ADMIN_SECRET = process.env.ADMIN_SECRET || ""
+
+function requireAdminSecret(req: Request, res: Response, next: NextFunction) {
+  const secret = req.headers["x-admin-secret"] || req.headers["authorization"]?.replace("Bearer ", "")
+  if (!ADMIN_SECRET || secret !== ADMIN_SECRET) return res.status(403).json({ error: "No autorizado" })
+  next()
+}
 
 // POST /api/admin/aprobar-repartidor  { usuarioId }
 router.post("/aprobar-repartidor", requireAdmin, async (req, res) => {
@@ -67,7 +75,7 @@ router.post("/rechazar-restaurante", requireAdmin, async (req, res) => {
 
 // POST /api/admin/reset-datos-prueba  { confirmacion: "BORRAR_TODO" }
 // Elimina TODOS los datos de prueba: usuarios, solicitudes, negocios, repartidores, pedidos
-router.post("/reset-datos-prueba", requireAdmin, async (req, res) => {
+router.post("/reset-datos-prueba", requireAdminSecret, async (req, res) => {
   if (req.body.confirmacion !== "BORRAR_TODO") return res.status(400).json({ error: "confirmacion requerida: BORRAR_TODO" })
   try {
     await sql`DELETE FROM mensajes`
