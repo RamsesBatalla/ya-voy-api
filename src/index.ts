@@ -31,6 +31,8 @@ import { initWebSocket } from "./websocket"
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const isDev = process.env.NODE_ENV !== "production";
+
 const origins = [
   process.env.FRONTEND_RESTAURANTE || "http://localhost:5173",
   process.env.FRONTEND_USUARIO     || "http://localhost:5174",
@@ -44,10 +46,12 @@ app.use(helmet({
 }));
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-app.use(cors({ origin: origins, credentials: true }));
+const corsOrigin = isDev
+  ? (_origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => cb(null, true)
+  : origins;
+app.use(cors({ origin: corsOrigin, credentials: true }));
 
 // ── Rate limiting (solo en producción) ───────────────────────────────────────
-const isDev = process.env.NODE_ENV !== "production";
 
 if (!isDev) {
   // Global: 300 req / 15 min por IP
