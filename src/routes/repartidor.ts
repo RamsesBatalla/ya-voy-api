@@ -1,8 +1,18 @@
 import { Router } from "express";
 import { sql } from "../db";
 import { notificarCliente } from "../websocket";
-import { requireAuth } from "../middleware/auth";
-import { getAuth } from "@clerk/express";
+import { sendPushToUser } from "../firebase";
+import { requireAuthRepartidor } from "../middleware/auth";
+import { logError } from "../logger";
+
+// Transiciones válidas por rol repartidor
+const TRANS_REPARTIDOR: Record<string, string[]> = {
+  listo:             ["en_camino"],
+  en_camino:         ["esperando_cliente", "entregado", "cancelado"],
+  esperando_cliente: ["entregado", "en_camino"],
+  entregado:         [],
+  cancelado:         [],
+}
 
 const router = Router();
 
@@ -41,8 +51,8 @@ router.get("/perfil/:userId", async (req, res) => {
 });
 
 // PATCH /api/repartidor/:userId/status (online/offline)
-router.patch("/:userId/status", requireAuth, async (req, res) => {
-  const { userId: authId } = getAuth(req);
+router.patch("/:userId/status", requireAuthRepartidor, async (req, res) => {
+  const authId = (req as any).repUserId;
   if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" });
   try {
     const nuevoStatus = req.body.en_linea ? "online" : "offline";
@@ -52,12 +62,15 @@ router.patch("/:userId/status", requireAuth, async (req, res) => {
 });
 
 // GET /api/repartidor/pedidos/disponibles
-router.get("/pedidos/disponibles", async (_req, res) => {
+router.get("/pedidos/disponibles", requireAuthRepartidor, async (_req, res) => {
   try {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre, v.direccion as negocio_direccion,
-             v.lat as lat_restaurante, v.lng as lng_restaurante
-      FROM pedidos p LEFT JOIN viveres v ON v.id = p.negocio_id
+             v.lat as lat_restaurante, v.lng as lng_restaurante,
+             u.telefono as cliente_telefono
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      LEFT JOIN usuarios u ON u.id = p.cliente_id
       WHERE p.status = 'listo' AND (p.repartidor_id IS NULL OR p.repartidor_id = '')
       ORDER BY p.creado_en DESC
     `;
@@ -66,7 +79,7 @@ router.get("/pedidos/disponibles", async (_req, res) => {
 });
 
 // PATCH /api/repartidor/pedidos/:id/aceptar
-router.patch("/pedidos/:id/aceptar", requireAuth, async (req, res) => {
+router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => {
   try {
     const { repartidorId } = req.body;
     const rows = await sql`
@@ -82,16 +95,22 @@ router.patch("/pedidos/:id/aceptar", requireAuth, async (req, res) => {
 });
 
 // PATCH /api/repartidor/pedidos/:id/status
-router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
+router.patch("/pedidos/:id/status", requireAuthRepartidor, async (req, res) => {
   try {
-    const statusPermitidos = ["en_camino", "esperando_cliente", "entregado", "cancelado"]
-    if (!statusPermitidos.includes(req.body.status)) return res.status(400).json({ error: "Status invalido" })
+    const { status } = req.body
+    const current = await sql`SELECT status FROM pedidos WHERE id = ${req.params.id}`
+    if (!current.length) return res.status(404).json({ error: "Pedido no encontrado" })
+    const estadoActual = current[0].status
+    if (!TRANS_REPARTIDOR[estadoActual]?.includes(status))
+      return res.status(400).json({ error: `No se puede pasar de '${estadoActual}' a '${status}'` })
+
     const rows = await sql`
-      UPDATE pedidos SET status = ${req.body.status}, actualizado_en = NOW()
+      UPDATE pedidos SET status = ${status}, actualizado_en = NOW()
       WHERE id = ${req.params.id} RETURNING *
     `;
     res.json(rows[0]);
     if (rows[0]?.cliente_id) notificarCliente(rows[0].cliente_id, "pedido_update", rows[0]);
+
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -100,8 +119,11 @@ router.get("/:userId/pedidos", async (req, res) => {
   try {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre,
+             u.telefono as cliente_telefono,
              ROUND((p.total * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
-      FROM pedidos p LEFT JOIN viveres v ON v.id = p.negocio_id
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      LEFT JOIN usuarios u ON u.id = p.cliente_id
       WHERE p.repartidor_id = ${req.params.userId}
       ORDER BY p.creado_en DESC LIMIT 30
     `;
@@ -117,7 +139,7 @@ function distKm(lat1: number, lng1: number, lat2: number, lng2: number) {
 }
 
 // Marcar en espera del cliente (solo si está en la ubicación)
-router.patch("/pedidos/:id/esperando", requireAuth, async (req, res) => {
+router.patch("/pedidos/:id/esperando", requireAuthRepartidor, async (req, res) => {
   try {
     const { lat, lng } = req.body;
     const rows = await sql`SELECT lat_entrega, lng_entrega, status FROM pedidos WHERE id = ${req.params.id}`;
@@ -128,14 +150,26 @@ router.patch("/pedidos/:id/esperando", requireAuth, async (req, res) => {
       const dist = distKm(Number(lat), Number(lng), Number(p.lat_entrega), Number(p.lng_entrega));
       if (dist > 0.3) return res.status(400).json({ error: "Debes estar a menos de 300m del cliente" });
     }
-    const updated = await sql`UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW() WHERE id = ${req.params.id} RETURNING cliente_id`;
-    if (updated[0]?.cliente_id) notificarCliente(updated[0].cliente_id, "pedido_update", { id: req.params.id, status: "esperando_cliente", esperando_desde: new Date().toISOString() });
+    const updated = await sql`
+      UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW()
+      WHERE id = ${req.params.id}
+      RETURNING cliente_id, negocio_id`
+    const pedidoUpd = updated[0]
+    if (pedidoUpd?.cliente_id)
+      notificarCliente(pedidoUpd.cliente_id, "pedido_update", { id: req.params.id, status: "esperando_cliente", esperando_desde: new Date().toISOString() })
+    if (pedidoUpd?.negocio_id) {
+      const negocio = await sql`SELECT owner_id FROM viveres WHERE id = ${pedidoUpd.negocio_id}`
+      if (negocio[0]?.owner_id) {
+        notificarCliente(negocio[0].owner_id, "pedido_update", { id: req.params.id, status: "esperando_cliente" })
+        await sendPushToUser(sql, negocio[0].owner_id, "Repartidor llegó con el cliente", "El repartidor está esperando al cliente en la dirección de entrega.", { pedidoId: req.params.id }).catch(() => {})
+      }
+    }
     res.json({ ok: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // Auto-expirar espera (llamado desde cliente cuando el timer expira)
-router.patch("/pedidos/:id/expirar-espera", requireAuth, async (req, res) => {
+router.patch("/pedidos/:id/expirar-espera", requireAuthRepartidor, async (req, res) => {
   try {
     const rows = await sql`SELECT status, esperando_desde FROM pedidos WHERE id = ${req.params.id}`;
     if (!rows.length || rows[0].status !== "esperando_cliente") return res.status(400).json({ error: "No aplica" });
@@ -163,7 +197,8 @@ router.get("/", async (_req, res) => {
 
 
 // PATCH /api/repartidor/:userId/ubicacion
-router.patch("/:userId/ubicacion", async (req, res) => {
+router.patch("/:userId/ubicacion", requireAuthRepartidor, async (req, res) => {
+  if ((req as any).repUserId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const { lat, lng } = req.body
     if (!lat || !lng) return res.status(400).json({ error: "lat y lng requeridos" })
