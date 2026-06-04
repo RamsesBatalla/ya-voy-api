@@ -5,10 +5,10 @@ import { notificarCliente } from "../websocket"
 
 const router = Router()
 
-// Init columnas foto_entrega y entregado_en
 const initFotoCols = async () => {
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS foto_entrega TEXT`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregado_en TIMESTAMPTZ`
+  await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS deuda_efectivo NUMERIC DEFAULT 0`
 }
 initFotoCols().catch(e => console.error("Error init foto cols:", e.message))
 
@@ -52,6 +52,22 @@ router.patch("/pedidos/:id/status", async (req, res) => {
     }
     if (status === "entregado" && pedido.cliente_id) {
       await sendPushToUser(sql, pedido.cliente_id, "Pedido entregado", "Que lo disfrutes! No olvides calificar tu experiencia", { pedidoId: pedido.id })
+    }
+
+    // Tracking de comisión efectivo/tarjeta por repartidor
+    if (status === "entregado" && pedido.repartidor_id) {
+      try {
+        const cfgRow = await sql`SELECT valor FROM app_config WHERE clave = 'comision_pct'`
+        const comisionPct = cfgRow.length ? parseFloat(cfgRow[0].valor) / 100 : 0.18
+        const comision = Math.round(Number(pedido.total || 0) * comisionPct * 100) / 100
+        if (pedido.metodo_pago === "efectivo") {
+          // El repartidor cobró el efectivo completo, le debe la comisión a la app
+          await sql`UPDATE repartidores SET deuda_efectivo = COALESCE(deuda_efectivo, 0) + ${comision} WHERE id = ${pedido.repartidor_id}`
+        } else if (pedido.metodo_pago === "tarjeta") {
+          // La comisión ya llega a la app; se descuenta de la deuda pendiente si la hay
+          await sql`UPDATE repartidores SET deuda_efectivo = GREATEST(0, COALESCE(deuda_efectivo, 0) - ${comision}) WHERE id = ${pedido.repartidor_id}`
+        }
+      } catch {}
     }
     if (status === "cancelado" && pedido.cliente_id) {
       await sendPushToUser(sql, pedido.cliente_id, "Pedido cancelado", "Tu pedido fue cancelado", { pedidoId: pedido.id })
