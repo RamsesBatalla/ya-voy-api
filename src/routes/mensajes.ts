@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { sql } from "../db"
 import { requireAuth } from "../middleware/auth"
+import { sendPushToUser } from "../firebase"
 
 const router = Router()
 
@@ -51,6 +52,26 @@ router.post("/", requireAuth, async (req, res) => {
       INSERT INTO mensajes (pedido_id, emisor_id, rol_emisor, mensaje)
       VALUES (${pedidoId}, ${remitenteId}, ${remitenteTipo}, ${texto.trim()})
       RETURNING id, pedido_id, emisor_id as remitente_id, rol_emisor as remitente_tipo, mensaje as texto, leido, creado_en`
+
+    // Notificar a los destinatarios (todos excepto el emisor)
+    const pedidoRows = await sql`
+      SELECT p.cliente_id, p.repartidor_id, v.owner_id
+      FROM pedidos p
+      JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id = ${pedidoId}`
+    if (pedidoRows.length) {
+      const { cliente_id, repartidor_id, owner_id } = pedidoRows[0]
+      const notifTitle = "Nuevo mensaje"
+      const notifBody = texto.trim().length > 60 ? texto.trim().slice(0, 57) + "..." : texto.trim()
+      const data = { pedidoId, tipo: "chat" }
+      if (remitenteTipo !== "cliente" && cliente_id)
+        await sendPushToUser(sql, cliente_id, notifTitle, notifBody, data)
+      if (remitenteTipo !== "repartidor" && repartidor_id)
+        await sendPushToUser(sql, repartidor_id, notifTitle, notifBody, data)
+      if (remitenteTipo !== "restaurante" && owner_id)
+        await sendPushToUser(sql, owner_id, notifTitle, notifBody, data)
+    }
+
     res.json(rows[0])
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

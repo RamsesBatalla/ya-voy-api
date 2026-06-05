@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
-import { getAuth } from "@clerk/express";
 import { sql } from "../db";
+import { requireAdmin } from "../middleware/auth";
 
 const router = Router();
 
@@ -16,13 +16,8 @@ router.get("/", async (_req: Request, res: Response) => {
   }
 });
 
-// PUT /api/config/:clave — solo admin (dashboard)
-router.put("/:clave", async (req: Request, res: Response) => {
-  const { userId } = getAuth(req);
-  const adminIds = (process.env.ADMIN_USER_IDS || "").split(",").map((s: string) => s.trim()).filter(Boolean);
-  if (!userId || (adminIds.length > 0 && !adminIds.includes(userId))) {
-    res.status(403).json({ error: "No autorizado" }); return;
-  }
+// PUT /api/config/:clave — solo admin
+router.put("/:clave", requireAdmin, async (req: Request, res: Response) => {
   const { clave } = req.params;
   const { valor } = req.body;
   try {

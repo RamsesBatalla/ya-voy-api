@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { sql } from "../db";
 import { requireAuth } from "../middleware/auth";
+import { invalidateCache } from "../cache";
 
 const router = Router();
 
@@ -8,6 +9,7 @@ router.patch("/:id/imagen",  requireAuth, async (req, res) => {
   try {
     const { imagen_url } = req.body;
     const rows = await sql`UPDATE viveres SET imagen_url = ${imagen_url} WHERE id = ${req.params.id} RETURNING *`;
+    invalidateCache("negocios:all")
     res.json(rows[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -15,6 +17,16 @@ router.patch("/:id/imagen",  requireAuth, async (req, res) => {
 router.patch("/:id/toggle",  requireAuth, async (req, res) => {
   try {
     const rows = await sql`UPDATE viveres SET esta_abierto = NOT esta_abierto WHERE id = ${req.params.id} RETURNING *`;
+    invalidateCache("negocios:all")
+    res.json(rows[0]);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/:id/pausar", requireAuth, async (req, res) => {
+  try {
+    await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS aceptando_pedidos BOOLEAN NOT NULL DEFAULT true`;
+    const rows = await sql`UPDATE viveres SET aceptando_pedidos = NOT aceptando_pedidos WHERE id = ${req.params.id} RETURNING *`;
+    invalidateCache("negocios:all")
     res.json(rows[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });

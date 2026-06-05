@@ -272,7 +272,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
   try {
 
     const { userId: authUserId } = getAuth(req);
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio, tiempoEstimado, tiempoEstimadoMin, paymentIntentId, propina, status: statusInicial } = req.body;
+    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio, tiempoEstimado, tiempoEstimadoMin, paymentIntentId, propina, status: statusInicial, tipoEntrega, programadoPara, walletMonto } = req.body;
 
     if (authUserId !== clienteId) return res.status(403).json({ error: "No autorizado" });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "El pedido debe tener al menos un producto" });
@@ -334,9 +334,9 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
     const rows = await sql`
 
-      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, propina, direccion_entrega, notas, metodo_pago, status, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado, tiempo_estimado_min, payment_intent_id)
+      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, propina, direccion_entrega, notas, metodo_pago, status, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado, tiempo_estimado_min, payment_intent_id, tipo_entrega, programado_para)
 
-VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${totalCalculado}, ${envio}, ${Number(propina) || 0}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${statusInicial === 'pendiente_pago' ? 'pendiente_pago' : 'nuevo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${paymentIntentId || null})
+VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${totalCalculado}, ${tipoEntrega === 'pickup' ? 0 : envio}, ${Number(propina) || 0}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${statusInicial === 'pendiente_pago' ? 'pendiente_pago' : programadoPara ? 'programado' : 'nuevo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${paymentIntentId || null}, ${tipoEntrega || 'domicilio'}, ${programadoPara || null})
 
       RETURNING *
 
@@ -344,6 +344,11 @@ VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${totalCalculado},
 
     if (cuponCodigo) {
       await sql`UPDATE cupones SET usos_actual = usos_actual + 1 WHERE codigo = ${cuponCodigo}`.catch(e => logError(e, "cupones:usos"))
+    }
+
+    if (walletMonto && Number(walletMonto) > 0) {
+      await sql`UPDATE usuarios SET wallet_balance = GREATEST(0, COALESCE(wallet_balance,0) - ${Number(walletMonto)}) WHERE id = ${clienteId}`.catch(e => logError(e, "wallet:debito"))
+      await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${Number(walletMonto)}, 'Aplicado en pedido', ${rows[0].id})`.catch(e => logError(e, "wallet:mov"))
     }
 
     res.json(rows[0]);

@@ -1,8 +1,5 @@
-import "dotenv/config";
-import * as Sentry from "@sentry/node"
-if (process.env.SENTRY_DSN) {
-  Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.2 })
-}
+import "./instrument"; // Sentry debe inicializarse antes que cualquier otro import
+import * as Sentry from "@sentry/node";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -24,7 +21,10 @@ import retirosRouter       from "./routes/retiros";
 import fondoRouter         from "./routes/fondo";
 import contingenciasRouter from "./routes/contingencias";
 import mensajesRouter      from "./routes/mensajes";
+import adminRouter         from "./routes/admin";
+import engagementRouter    from "./routes/engagement";
 import { initCronJobs } from "./cron";
+import { runMigrations } from "./migrations";
 import { createServer } from "http"
 import { initWebSocket } from "./websocket"
 
@@ -118,11 +118,23 @@ app.use("/api/repartidor",    repartidorRouter);
 app.use("/api/config",        configRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/soporte",       soporteRouter);
+app.use("/api/admin",         adminRouter);
+app.use("/api/usuario",       engagementRouter);
+
+// ── Sentry error handler (debe ir después de las rutas) ───────────────────
+if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
+
+// ── Advertencias de configuración ────────────────────────────────────────────
+if (!process.env.STRIPE_WEBHOOK_SECRET)
+  console.warn("⚠️  STRIPE_WEBHOOK_SECRET no configurado — los webhooks de Stripe no funcionarán")
+if (!process.env.SENTRY_DSN)
+  console.warn("⚠️  SENTRY_DSN no configurado — los errores no se reportarán a Sentry")
 
 const server = createServer(app);
 initWebSocket(server);
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`YA VOY API en http://localhost:${PORT}`);
+  await runMigrations().catch(e => console.error("Error migraciones:", e.message));
   initCronJobs();
 });
 export default app;

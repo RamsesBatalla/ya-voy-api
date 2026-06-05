@@ -2,6 +2,9 @@ import { Router } from "express"
 import Stripe from "stripe"
 import { sql } from "../db"
 import { requireAuth } from "../middleware/auth"
+import { logError } from "../logger"
+import { sendPushToUser } from "../firebase"
+import { notificarCliente } from "../websocket"
 
 const router = Router()
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
@@ -38,13 +41,14 @@ router.post("/calcular-envio", async (req, res) => {
 
     const tiempoMin = Math.ceil(distanciaKm / 25 * 60) + 10 // velocidad promedio 25km/h + 10min prep
     const tiempoEstimado = tiempoMin <= 15 ? "10-15 min" : tiempoMin <= 25 ? "15-25 min" : tiempoMin <= 40 ? "25-40 min" : Math.ceil(tiempoMin/5)*5 + " min"
-    res.json({ distanciaKm: Math.round(distanciaKm * 10) / 10, costoEnvio, tiempoEstimado })
+    res.json({ distanciaKm: Math.round(distanciaKm * 10) / 10, costoEnvio, tiempoEstimado, tiempoMinutos: tiempoMin })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
 // ─── PAYMENT INTENT ────────────────────────────────────────────────────────
 router.post("/payment-intent", requireAuth, async (req, res) => {
   try {
+    const { userId: authUserId } = (req as any).auth ?? {}
     const { amount, currency = "mxn", negocioId, repartidorId, costoEnvio, metadata = {} } = req.body
     if (!amount || amount < 10) return res.status(400).json({ error: "Monto invalido" })
 
@@ -72,6 +76,7 @@ router.post("/payment-intent", requireAuth, async (req, res) => {
         negocioId: negocioId || "",
         repartidorId: repartidorId || "",
         costoEnvio: String(costoEnvio || 0),
+        userId: authUserId || "",
         ...metadata
       },
       automatic_payment_methods: { enabled: true },
@@ -183,9 +188,44 @@ router.post("/webhook", async (req, res) => {
   if (event.type === "payment_intent.succeeded") {
     const pi = event.data.object as any
     const repartidorId = pi.metadata?.repartidorId
-    const costoEnvio = Math.max(35, parseFloat(pi.metadata?.costoEnvio || "35") || 35)
+    const pedidoId     = pi.metadata?.pedidoId
 
-    if (repartidorId) {
+    // Activar pedido si estaba pendiente_pago y notificar al restaurante
+    if (pedidoId) {
+      try {
+        const rows = await sql`
+          UPDATE pedidos SET status = 'nuevo', actualizado_en = NOW()
+          WHERE id = ${pedidoId} AND status = 'pendiente_pago'
+          RETURNING negocio_id, cliente_id, costo_envio, propina`
+        if (rows[0]?.negocio_id) {
+          const negocio = await sql`SELECT owner_id, nombre FROM viveres WHERE id = ${rows[0].negocio_id}`
+          if (negocio[0]?.owner_id) {
+            notificarCliente(negocio[0].owner_id, "nuevo_pedido", { id: pedidoId })
+            await sendPushToUser(sql, negocio[0].owner_id, "Nuevo pedido", `Pago confirmado — tienes un pedido en ${negocio[0]?.nombre}`, { pedidoId }).catch(() => {})
+          }
+        }
+
+        // Si hay repartidor ya asignado, transferirle costo_envio + propina reales del pedido
+        const repId = repartidorId || rows[0]?.repartidor_id
+        if (repId && rows[0]) {
+          const montoTotal = Number(rows[0].costo_envio || 35) + Number(rows[0].propina || 0)
+          const repRows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${repId}`
+          const repAccountId = repRows[0]?.stripe_account_id
+          if (repAccountId) {
+            await stripe.transfers.create({
+              amount: Math.round(montoTotal * 100),
+              currency: "mxn",
+              destination: repAccountId,
+              source_transaction: pi.latest_charge as string,
+              metadata: { paymentIntentId: pi.id, pedidoId, repId },
+            }).catch(e => logError(e, "stripe:transfer"))
+          }
+        }
+      } catch (e: any) { logError(e, "stripe:activar_pedido") }
+
+    } else if (repartidorId) {
+      // Flujo legacy sin pedidoId: transferir solo costo envío del metadata
+      const costoEnvio = Math.max(35, parseFloat(pi.metadata?.costoEnvio || "35") || 35)
       try {
         const rows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${repartidorId}`
         const repAccountId = rows[0]?.stripe_account_id
@@ -198,9 +238,45 @@ router.post("/webhook", async (req, res) => {
             metadata: { paymentIntentId: pi.id, repartidorId },
           })
         }
-      } catch (e: any) {
-        console.error("Error transfiriendo a repartidor:", e.message)
+      } catch (e: any) { logError(e, "stripe:transfer_legacy") }
+    }
+  }
+
+  else if (event.type === "payment_intent.payment_failed") {
+    const pi = event.data.object as any
+    const userId  = pi.metadata?.userId
+    const pedidoId = pi.metadata?.pedidoId
+    try {
+      if (pedidoId) {
+        await sql`UPDATE pedidos SET status = 'pago_fallido', pago_fallido_en = NOW() WHERE id = ${pedidoId} AND status = 'nuevo'`
       }
+      if (userId) {
+        await sendPushToUser(sql, userId,
+          "Pago no procesado",
+          "No pudimos cobrar tu pedido. Toca aquí para reintentar.",
+          { tipo: "pago_fallido", pedidoId: pedidoId || "" }
+        ).catch(() => {})
+      }
+    } catch (e: any) { logError(e, "stripe:payment_failed") }
+  }
+
+  else if (event.type === "charge.dispute.created") {
+    const dispute = event.data.object as any
+    logError(
+      new Error(`Contracargo recibido: ${dispute.id} — monto $${(dispute.amount / 100).toFixed(2)} MXN — razón: ${dispute.reason}`),
+      "stripe:dispute"
+    )
+  }
+
+  else if (event.type === "charge.refunded") {
+    const charge = event.data.object as any
+    const userId = charge.metadata?.userId
+    if (userId) {
+      await sendPushToUser(sql, userId,
+        "Reembolso procesado",
+        `Tu reembolso de $${(charge.amount_refunded / 100).toFixed(2)} MXN ha sido procesado.`,
+        { tipo: "reembolso" }
+      ).catch(() => {})
     }
   }
 

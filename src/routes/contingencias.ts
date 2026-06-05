@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { sql } from "../db"
 import { requireAuth, requireAdmin } from "../middleware/auth"
+import { logError } from "../logger"
 
 const router = Router()
 
@@ -53,7 +54,7 @@ router.post("/no-pago", requireAuth, async (req, res) => {
   await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado_en TIMESTAMPTZ`
     if (pedido.cliente_id) {
       await sql`UPDATE usuarios SET bloqueado_pendiente = true, razon_bloqueo = 'No pago en efectivo - pendiente revision admin', bloqueado_en = NOW() WHERE id = ${pedido.cliente_id}`
-      await sql`INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon) VALUES ('usuario', ${pedido.cliente_id}, 'No pago en efectivo — reporte de repartidor')`.catch(() => {})
+      await sql`INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon) VALUES ('usuario', ${pedido.cliente_id}, 'No pago en efectivo — reporte de repartidor')`.catch(e => logError(e, "contingencia:bloqueo_usuario"))
     }
 
     const cfgEnvio = await sql`SELECT valor FROM app_config WHERE clave = 'envio_minimo'`
@@ -64,7 +65,7 @@ router.post("/no-pago", requireAuth, async (req, res) => {
       RETURNING *`
 
     await sql`INSERT INTO fondo_recuperacion (tipo, monto, descripcion, pedido_id)
-      VALUES ('uso', ${envio}, ${"Pago envio repartidor por no-pago cliente — pedido " + pedidoId}, ${pedidoId})`.catch(() => {})
+      VALUES ('uso', ${envio}, ${"Pago envio repartidor por no-pago cliente — pedido " + pedidoId}, ${pedidoId})`.catch(e => logError(e, "contingencia:fondo_nopago"))
 
     res.json({ ok: true, contingencia: rows[0] })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
@@ -93,7 +94,7 @@ router.post("/accidente", requireAuth, async (req, res) => {
       RETURNING *`
 
     await sql`INSERT INTO fondo_recuperacion (tipo, monto, descripcion, pedido_id)
-      VALUES ('uso', ${reembolso}, ${"Reembolso cliente por accidente repartidor — pedido " + pedidoId}, ${pedidoId})`.catch(() => {})
+      VALUES ('uso', ${reembolso}, ${"Reembolso cliente por accidente repartidor — pedido " + pedidoId}, ${pedidoId})`.catch(e => logError(e, "contingencia:fondo_accidente"))
 
     await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW() WHERE id = ${pedidoId}`
 

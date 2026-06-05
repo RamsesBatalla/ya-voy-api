@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws"
 import { IncomingMessage } from "http"
 import { Server } from "http"
+import { verifyTokenAny } from "./middleware/auth"
 
 // ── Ubicación repartidor ──────────────────────────────────────────────────────
 const suscriptores = new Map<string, Set<WebSocket>>()
@@ -19,9 +20,10 @@ export function notificarCliente(clienteId: string, tipo: string, data: unknown)
 export function initWebSocket(server: Server) {
   const wss = new WebSocketServer({ server })
 
-  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-    const url  = new URL(req.url || "", "http://localhost")
-    const path = url.pathname
+  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
+    const url    = new URL(req.url || "", "http://localhost")
+    const path   = url.pathname
+    const token  = url.searchParams.get("token") || ""
 
     // ── Ruta ubicación ───────────────────────────────────────────────────────
     if (path === "/ws/ubicacion") {
@@ -31,6 +33,11 @@ export function initWebSocket(server: Server) {
       if (!repartidorId) { ws.close(1008, "repartidorId requerido"); return }
 
       if (rol === "repartidor") {
+        // El repartidor debe enviar su propio token para verificar identidad
+        if (!token) { ws.close(1008, "token requerido"); return }
+        const authUserId = await verifyTokenAny(token)
+        if (!authUserId || authUserId !== repartidorId) { ws.close(1008, "No autorizado"); return }
+
         ws.on("message", (data) => {
           try {
             const { lat, lng } = JSON.parse(data.toString())
@@ -44,7 +51,13 @@ export function initWebSocket(server: Server) {
           } catch (e: any) { console.error("WS ubicacion parse:", e.message) }
         })
         ws.on("close", () => { ubicaciones.delete(repartidorId) })
+
       } else {
+        // Cliente suscrito a la ubicación del repartidor — requiere token válido
+        if (!token) { ws.close(1008, "token requerido"); return }
+        const authUserId = await verifyTokenAny(token)
+        if (!authUserId) { ws.close(1008, "No autorizado"); return }
+
         if (!suscriptores.has(repartidorId)) suscriptores.set(repartidorId, new Set())
         suscriptores.get(repartidorId)!.add(ws)
         const ultima = ubicaciones.get(repartidorId)
@@ -60,6 +73,10 @@ export function initWebSocket(server: Server) {
     else if (path === "/ws/pedidos") {
       const userId = url.searchParams.get("userId") || ""
       if (!userId) { ws.close(1008, "userId requerido"); return }
+
+      if (!token) { ws.close(1008, "token requerido"); return }
+      const authUserId = await verifyTokenAny(token)
+      if (!authUserId || authUserId !== userId) { ws.close(1008, "No autorizado"); return }
 
       if (!pedidoClientes.has(userId)) pedidoClientes.set(userId, new Set())
       pedidoClientes.get(userId)!.add(ws)
