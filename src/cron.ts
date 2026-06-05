@@ -4,12 +4,11 @@ import { sendPushToUser } from "./firebase"
 import { notificarCliente } from "./websocket"
 import { logError } from "./logger"
 
-const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME
-if (!CLOUDINARY_CLOUD) throw new Error("CLOUDINARY_CLOUD_NAME no definido en variables de entorno")
-const CLOUDINARY_KEY   = process.env.CLOUDINARY_API_KEY || ""
-const CLOUDINARY_SECRET = process.env.CLOUDINARY_API_SECRET || ""
-
 async function deleteCloudinaryImage(url: string) {
+  const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME
+  const CLOUDINARY_KEY   = process.env.CLOUDINARY_API_KEY || ""
+  const CLOUDINARY_SECRET = process.env.CLOUDINARY_API_SECRET || ""
+  if (!CLOUDINARY_CLOUD) return
   try {
     const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-z]+$/)
     if (!match) return

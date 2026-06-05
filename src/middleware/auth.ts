@@ -1,12 +1,10 @@
 import { Request, Response, NextFunction } from "express"
-import { getAuth, createClerkClient } from "@clerk/express"
+import { getAuth, verifyToken } from "@clerk/express"
 
-// Clerk clients por instancia — inicializados una vez al arrancar
-const clerkMain = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY || "" })
-const clerkUsr  = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY_USUARIO || process.env.CLERK_SECRET_KEY || "" })
-const clerkRep  = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY_REPARTIDOR || process.env.CLERK_SECRET_KEY || "" })
+const KEY_MAIN = process.env.CLERK_SECRET_KEY || ""
+const KEY_USR  = process.env.CLERK_SECRET_KEY_USUARIO || process.env.CLERK_SECRET_KEY || ""
+const KEY_REP  = process.env.CLERK_SECRET_KEY_REPARTIDOR || process.env.CLERK_SECRET_KEY || ""
 
-// Admin IDs cacheados al arrancar, no re-parseados en cada request
 export const ADMIN_IDS = (process.env.ADMIN_USER_IDS || "").split(",").map(s => s.trim()).filter(Boolean)
 
 // ── Restaurante (Clerk principal) ─────────────────────────────────────────────
@@ -30,7 +28,7 @@ export async function requireAuthUsuario(req: Request, res: Response, next: Next
   const token = req.headers["authorization"]?.replace("Bearer ", "")
   if (!token) return res.status(401).json({ error: "No autorizado" })
   try {
-    const payload = await clerkUsr.verifyToken(token)
+    const payload = await verifyToken(token, { secretKey: KEY_USR })
     ;(req as any).usrUserId = payload.sub
     next()
   } catch {
@@ -43,7 +41,7 @@ export async function requireAuthRepartidor(req: Request, res: Response, next: N
   const token = req.headers["authorization"]?.replace("Bearer ", "")
   if (!token) return res.status(401).json({ error: "No autorizado" })
   try {
-    const payload = await clerkRep.verifyToken(token)
+    const payload = await verifyToken(token, { secretKey: KEY_REP })
     ;(req as any).repUserId = payload.sub
     next()
   } catch {
@@ -53,9 +51,9 @@ export async function requireAuthRepartidor(req: Request, res: Response, next: N
 
 // ── Helper WS: prueba las 3 instancias, devuelve userId o null ─────────────────
 export async function verifyTokenAny(token: string): Promise<string | null> {
-  for (const client of [clerkMain, clerkUsr, clerkRep]) {
+  for (const key of [KEY_MAIN, KEY_USR, KEY_REP]) {
     try {
-      const payload = await client.verifyToken(token)
+      const payload = await verifyToken(token, { secretKey: key })
       return payload.sub
     } catch {}
   }

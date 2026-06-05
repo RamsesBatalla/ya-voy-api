@@ -1,5 +1,4 @@
 import { Router } from "express"
-import { getAuth } from "@clerk/express"
 import { sql } from "../db"
 import { requireAuth, requireAuthUsuario } from "../middleware/auth"
 import { logError } from "../logger"
@@ -59,8 +58,8 @@ router.post("/puntos/canjear", requireAuthUsuario, async (req, res) => {
     const bloques = Math.floor(user.puntos / 100)
     const descuento = bloques * 10
     const codigo = "PTS-" + authId.slice(-4).toUpperCase() + "-" + Date.now().toString(36).toUpperCase()
-    await sql`INSERT INTO cupones (codigo, tipo, valor, usos_max, descripcion)
-      VALUES (${codigo}, 'monto', ${descuento}, 1, ${'Canje de ' + user.puntos + ' puntos'})`
+    await sql`INSERT INTO cupones (codigo, tipo, valor, usos_max)
+      VALUES (${codigo}, 'monto', ${descuento}, 1)`
     await sql`UPDATE usuarios SET puntos = 0 WHERE id = ${authId}`
     await sql`INSERT INTO puntos_movimientos (usuario_id, puntos, concepto)
       VALUES (${authId}, ${-user.puntos}, ${'Canje por cupón ' + codigo})`
