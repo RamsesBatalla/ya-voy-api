@@ -2,14 +2,16 @@ import { Router } from "express"
 import { sql } from "../db"
 import { getAuth } from "@clerk/express"
 import { sendPushToUser } from "../firebase"
+import { verifyTokenAny } from "../middleware/auth"
 const router = Router()
 
-// Guardar token FCM del dispositivo
+// Guardar token FCM del dispositivo — acepta JWT de las 3 instancias Clerk
 router.post("/token", async (req, res) => {
   try {
-    const { userId } = getAuth(req)
+    const authHeader = req.headers["authorization"]?.replace("Bearer ", "")
+    const userId = authHeader ? await verifyTokenAny(authHeader) : null
     const { token } = req.body
-    if (!userId || !token) return res.status(400).json({ error: "userId y token requeridos" })
+    if (!userId || !token) return res.status(400).json({ error: "No autorizado o token faltante" })
     await sql`
       INSERT INTO device_tokens (user_id, token, updated_at)
       VALUES (${userId}, ${token}, NOW())
