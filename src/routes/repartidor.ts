@@ -4,6 +4,7 @@ import { notificarCliente } from "../websocket";
 import { sendPushToUser } from "../firebase";
 import { requireAuthRepartidor } from "../middleware/auth";
 import { logError } from "../logger";
+import { notificarSolicitudRepartidor } from "../notificationsAdmin";
 
 // Transiciones válidas por rol repartidor
 const TRANS_REPARTIDOR: Record<string, string[]> = {
@@ -28,6 +29,21 @@ router.post("/solicitud", async (req, res) => {
     } else {
       await sql`INSERT INTO solicitudes (id, usuario_id, tipo, datos, documentos, status) VALUES (gen_random_uuid()::text, ${userId}, 'repartidor', ${datos}::jsonb, ${docs}::jsonb, 'pendiente')`;
     }
+
+    // Notificación en segundo plano al Administrador
+    notificarSolicitudRepartidor({
+      nombre: nombre || "Sin nombre",
+      email: email || "",
+      telefono: telefono || "",
+      vehiculo_tipo: vehiculo_tipo || "moto",
+      vehiculo_modelo,
+      vehiculo_placas,
+      ine_frente: ine_frente_url,
+      ine_reverso: ine_reverso_url,
+      selfie: selfie_url,
+      tarjeta_url,
+    }).catch(err => logError(err, "notificarSolicitudRepartidor"));
+
     res.json({ ok: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -42,7 +58,9 @@ router.get("/solicitud/:userId", async (req, res) => {
 });
 
 // GET /api/repartidor/perfil/:userId
-router.get("/perfil/:userId", async (req, res) => {
+router.get("/perfil/:userId", requireAuthRepartidor, async (req, res) => {
+  const uid = (req as any).repUserId;
+  if (uid !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" });
   try {
     const rows = await sql`SELECT * FROM repartidores WHERE id = ${req.params.userId}`;
     if (!rows.length) return res.status(404).json({ error: "No encontrado" });

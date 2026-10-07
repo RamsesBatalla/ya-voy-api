@@ -1,17 +1,19 @@
 ﻿import { Router } from "express";
 import { sql } from "../db";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
-import { getAuth, clerkClient } from "@clerk/express";
+import admin from "firebase-admin";
 import { logError } from "../logger";
 
 const router = Router();
 
-router.post("/sync", async (req, res) => {
+router.post("/sync", requireAuth, async (req, res) => {
   try {
-    const { userId, email, nombre, fotoUrl, rol } = req.body;
+    const userId = (req as any).userId;
+    const { email, nombre, fotoUrl, rol } = req.body;
+    const rolSanitizado = ["cliente", "negocio", "repartidor"].includes(rol) ? rol : "cliente";
     await sql`
       INSERT INTO usuarios (id, email, nombre, foto_url, rol)
-      VALUES (${userId}, ${email}, ${nombre}, ${fotoUrl}, ${rol || "cliente"})
+      VALUES (${userId}, ${email}, ${nombre}, ${fotoUrl}, ${rolSanitizado})
       ON CONFLICT (id) DO UPDATE SET
         email    = EXCLUDED.email,
         nombre   = EXCLUDED.nombre,
@@ -25,7 +27,9 @@ router.post("/sync", async (req, res) => {
   }
 });
 
-router.get("/perfil/:userId", async (req, res) => {
+router.get("/perfil/:userId", requireAuthUsuario, async (req, res) => {
+  const uid = (req as any).usrUserId;
+  if (uid !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" });
   try {
     const rows = await sql`SELECT * FROM usuarios WHERE id = ${req.params.userId}`;
     if (!rows.length) return res.status(404).json({ error: "No encontrado" });
@@ -76,8 +80,8 @@ router.post("/fusionar", requireAuthUsuario, async (req, res) => {
     await sql`DELETE FROM reportes_soporte WHERE usuario_id = ${duplicadoId}`.catch(e => logError(e, "fusionar:reportes"));
     await sql`DELETE FROM usuarios WHERE id = ${duplicadoId}`;
 
-    // Eliminar la cuenta Clerk del duplicado (best-effort)
-    try { await clerkClient.users.deleteUser(duplicadoId); } catch {}
+    // Eliminar la cuenta Firebase del duplicado (best-effort)
+    try { await admin.auth().deleteUser(duplicadoId); } catch {}
 
     res.json({ ok: true });
   } catch (e: any) {

@@ -1,11 +1,10 @@
 import { Router } from "express"
 import { sql } from "../db"
-import { getAuth } from "@clerk/express"
 import { sendPushToUser } from "../firebase"
-import { verifyTokenAny } from "../middleware/auth"
+import { requireAdmin, verifyTokenAny } from "../middleware/auth"
 const router = Router()
 
-// Guardar token FCM del dispositivo — acepta JWT de las 3 instancias Clerk
+// Guardar token FCM del dispositivo
 router.post("/token", async (req, res) => {
   try {
     const authHeader = req.headers["authorization"]?.replace("Bearer ", "")
@@ -22,11 +21,8 @@ router.post("/token", async (req, res) => {
 })
 
 // POST /api/notificaciones/push - solo admins pueden enviar push
-router.post("/push", async (req, res) => {
+router.post("/push", requireAdmin, async (req, res) => {
   try {
-    const { userId: adminId } = getAuth(req)
-    const ADMIN_IDS = (process.env.ADMIN_USER_IDS || "").split(",")
-    if (!adminId || !ADMIN_IDS.includes(adminId)) return res.status(403).json({ error: "No autorizado" })
     const { userId, titulo, cuerpo, data } = req.body
     if (!userId || !titulo || !cuerpo) return res.status(400).json({ error: "userId, titulo y cuerpo requeridos" })
     await sendPushToUser(sql, userId, titulo, cuerpo, data || {})

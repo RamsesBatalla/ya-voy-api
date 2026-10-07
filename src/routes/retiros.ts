@@ -2,7 +2,6 @@ import { Router } from "express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
 import { requireAuth, requireAdmin } from "../middleware/auth"
-import { getAuth } from "@clerk/express"
 
 const router = Router()
 
@@ -33,7 +32,7 @@ router.get("/", requireAdmin, async (_req, res) => {
 
 // GET /api/retiros/:tipo/:actorId — retiros propios (IDOR: verifica que sea el mismo usuario)
 router.get("/:tipo/:actorId", requireAuth, async (req, res) => {
-  const { userId } = getAuth(req)
+  const userId = (req as any).userId
   if (userId !== req.params.actorId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const rows = await sql`
@@ -46,7 +45,7 @@ router.get("/:tipo/:actorId", requireAuth, async (req, res) => {
 
 // GET /api/retiros/saldo/:tipo/:actorId — saldo propio (IDOR: verifica mismo usuario)
 router.get("/saldo/:tipo/:actorId", requireAuth, async (req, res) => {
-  const { userId } = getAuth(req)
+  const userId = (req as any).userId
   if (userId !== req.params.actorId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const { tipo, actorId } = req.params

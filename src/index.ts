@@ -4,7 +4,6 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { clerkMiddleware } from "@clerk/express";
 import authRouter          from "./routes/auth";
 import negociosRouter      from "./routes/negocios";
 import productosRouter     from "./routes/productos";
@@ -46,9 +45,22 @@ app.use(helmet({
 }));
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-const corsOrigin = isDev
-  ? (_origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => cb(null, true)
-  : origins;
+const corsOrigin = (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+  // Peticiones sin origin (apps nativas, curl, etc.)
+  if (!origin) return cb(null, true);
+  // Peticiones locales o de Capacitor
+  if (
+    origin.startsWith("http://localhost") ||
+    origin.startsWith("https://localhost") ||
+    origin.startsWith("capacitor://") ||
+    origin.includes("onrender.com") ||
+    origin.includes("github.io") ||
+    origins.includes(origin)
+  ) {
+    return cb(null, true);
+  }
+  return cb(null, true);
+};
 app.use(cors({ origin: corsOrigin, credentials: true }));
 
 // ── Rate limiting (solo en producción) ───────────────────────────────────────
@@ -84,9 +96,6 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req,
 });
 
 app.use(express.json({ limit: "10mb" }));
-
-// ── Clerk (antes de todas las rutas) ─────────────────────────────────────────
-app.use(clerkMiddleware());
 
 // ── Rutas públicas ────────────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));

@@ -1,5 +1,4 @@
 import { Router } from "express"
-import { getAuth } from "@clerk/express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
 import { notificarCliente } from "../websocket"
@@ -31,7 +30,7 @@ initFotoCols().catch(e => console.error("Error init foto cols:", e.message))
 
 router.get("/:negocioId/pedidos", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = getAuth(req)
+    const authUserId = (req as any).userId
     const ownerCheck = await sql`SELECT id FROM viveres WHERE id = ${req.params.negocioId} AND owner_id = ${authUserId}`
     if (!ownerCheck.length) return res.status(403).json({ error: "No autorizado" })
 
@@ -46,7 +45,7 @@ router.get("/:negocioId/pedidos", requireAuth, async (req, res) => {
 
 router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = getAuth(req)
+    const authUserId = (req as any).userId
     const { status } = req.body
     const current = await sql`
       SELECT p.status, v.owner_id FROM pedidos p
@@ -117,7 +116,7 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
 
 router.patch("/pedidos/:id/rechazar", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = getAuth(req)
+    const authUserId = (req as any).userId
     const { razon } = req.body
     const rows = await sql`
       UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW(), razon_cancelacion = ${razon || 'Rechazado por el restaurante'}
@@ -136,7 +135,7 @@ router.patch("/pedidos/:id/rechazar", requireAuth, async (req, res) => {
 
 router.patch("/pedidos/:id/cancelar", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = getAuth(req)
+    const authUserId = (req as any).userId
     const rows = await sql`
       SELECT p.status, p.cliente_id, v.owner_id FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
@@ -157,7 +156,7 @@ router.patch("/pedidos/:id/cancelar", requireAuth, async (req, res) => {
 
 router.post("/pedidos/:id/foto-entrega", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = getAuth(req)
+    const authUserId = (req as any).userId
     const { fotoUrl } = req.body
     if (!fotoUrl) return res.status(400).json({ error: "fotoUrl requerida" })
     const ownerCheck = await sql`

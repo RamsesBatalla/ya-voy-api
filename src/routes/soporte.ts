@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { sql } from "../db";
 import { requireAdmin } from "../middleware/auth";
+import { notificarTicketSoporte } from "../notificationsAdmin";
+import { logError } from "../logger";
 
 const router = Router();
 
@@ -34,6 +36,16 @@ router.post("/", async (req, res) => {
       VALUES (${usuarioId}, ${usuarioEmail || ""}, ${usuarioNombre || ""}, ${pedidoId || null}, ${tipo}, ${comentario || ""})
       RETURNING *
     `;
+
+    // Notificación en segundo plano al Administrador
+    notificarTicketSoporte({
+      usuarioNombre: usuarioNombre || usuarioEmail || "Usuario Ya Voy",
+      usuarioEmail,
+      tipo,
+      comentario: comentario || "Sin comentario",
+      pedidoId,
+    }).catch(err => logError(err, "notificarTicketSoporte"));
+
     res.json(reporte);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });

@@ -1,5 +1,7 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { sql } from '../db';
+import { notificarSolicitudRestaurante } from '../notificationsAdmin';
+import { logError } from '../logger';
 
 const router = Router();
 
@@ -9,7 +11,7 @@ router.post('/solicitud', async (req, res) => {
 
     await sql`
       INSERT INTO usuarios (id, email, nombre, rol)
-      VALUES (${userId}, ${datos.email || ''}, ${datos.email || ''}, 'cliente')
+      VALUES (${userId}, ${datos?.email || ''}, ${datos?.email || ''}, 'cliente')
       ON CONFLICT (id) DO NOTHING
     `;
 
@@ -27,6 +29,18 @@ router.post('/solicitud', async (req, res) => {
       VALUES (${userId}, ${tipo}, 'pendiente', ${JSON.stringify(datos)}, ${JSON.stringify(documentos)})
       RETURNING *
     `;
+
+    // Notificación en segundo plano al Administrador
+    notificarSolicitudRestaurante({
+      nombre_negocio: datos?.nombre || 'Nuevo Restaurante',
+      contacto_nombre: datos?.contacto || datos?.email || 'Sin contacto',
+      email: datos?.email || '',
+      telefono: datos?.telefono || '',
+      categoria: datos?.categoria,
+      direccion: datos?.direccion,
+      logo_url: documentos?.logo || documentos?.foto,
+    }).catch(err => logError(err, 'notificarSolicitudRestaurante'));
+
     res.json({ ok: true, solicitud: rows[0] });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

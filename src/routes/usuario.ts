@@ -3,7 +3,6 @@ import rateLimit from "express-rate-limit";
 import { sql } from "../db";
 import { sendPushToUser } from "../firebase";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
-import { getAuth } from "@clerk/express";
 import { getCache, setCache, invalidateCache } from "../cache";
 import { logError } from "../logger";
 
@@ -271,7 +270,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
   try {
 
-    const { userId: authUserId } = getAuth(req);
+    const authUserId = (req as any).userId;
     const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio, tiempoEstimado, tiempoEstimadoMin, paymentIntentId, propina, status: statusInicial, tipoEntrega, programadoPara, walletMonto } = req.body;
 
     if (authUserId !== clienteId) return res.status(403).json({ error: "No autorizado" });
@@ -511,7 +510,7 @@ router.patch("/perfil/:userId", requireAuthUsuario, async (req, res) => {
 
 // DELETE /api/usuario/:userId — eliminar cuenta (soft delete, solo el propio usuario)
 router.delete("/:userId", requireAuth, async (req, res) => {
-  const { userId: authId } = getAuth(req)
+  const authId = (req as any).userId
   if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const { userId } = req.params
@@ -529,7 +528,7 @@ router.delete("/:userId", requireAuth, async (req, res) => {
 
 // GET /api/usuario/direcciones/:userId
 router.get("/direcciones/:userId", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   if (authUserId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const rows = await sql`SELECT * FROM direcciones WHERE usuario_id = ${req.params.userId} ORDER BY principal DESC, creado_en ASC`
@@ -539,7 +538,7 @@ router.get("/direcciones/:userId", requireAuth, async (req, res) => {
 
 // POST /api/usuario/direcciones  { label, icono, direccion, lat, lng }
 router.post("/direcciones", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   try {
     const { label, icono, direccion, lat, lng } = req.body
     if (!label || !direccion) return res.status(400).json({ error: "label y direccion requeridos" })
@@ -556,7 +555,7 @@ router.post("/direcciones", requireAuth, async (req, res) => {
 
 // PUT /api/usuario/direcciones/:id
 router.put("/direcciones/:id", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   try {
     const { label, icono, direccion, lat, lng } = req.body
     const rows = await sql`
@@ -569,7 +568,7 @@ router.put("/direcciones/:id", requireAuth, async (req, res) => {
 
 // PATCH /api/usuario/direcciones/:id/principal
 router.patch("/direcciones/:id/principal", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   try {
     await sql`UPDATE direcciones SET principal = false WHERE usuario_id = ${authUserId}`
     const rows = await sql`UPDATE direcciones SET principal = true WHERE id = ${req.params.id} AND usuario_id = ${authUserId} RETURNING *`
@@ -580,7 +579,7 @@ router.patch("/direcciones/:id/principal", requireAuth, async (req, res) => {
 
 // DELETE /api/usuario/direcciones/:id
 router.delete("/direcciones/:id", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   try {
     const rows = await sql`DELETE FROM direcciones WHERE id = ${req.params.id} AND usuario_id = ${authUserId} RETURNING usuario_id, principal`
     if (!rows.length) return res.status(404).json({ error: "Dirección no encontrada" })
@@ -595,7 +594,7 @@ router.delete("/direcciones/:id", requireAuth, async (req, res) => {
 
 // GET /api/usuario/favoritos/:clienteId
 router.get("/favoritos/:clienteId", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   if (authUserId !== req.params.clienteId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const rows = await sql`
@@ -609,7 +608,7 @@ router.get("/favoritos/:clienteId", requireAuth, async (req, res) => {
 
 // POST /api/usuario/favoritos  { negocioId }
 router.post("/favoritos", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   try {
     const { negocioId } = req.body
     if (!negocioId) return res.status(400).json({ error: "negocioId requerido" })
@@ -620,7 +619,7 @@ router.post("/favoritos", requireAuth, async (req, res) => {
 
 // DELETE /api/usuario/favoritos/:clienteId/:negocioId
 router.delete("/favoritos/:clienteId/:negocioId", requireAuth, async (req, res) => {
-  const { userId: authUserId } = getAuth(req)
+  const authUserId = (req as any).userId
   if (authUserId !== req.params.clienteId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     await sql`DELETE FROM favoritos WHERE cliente_id = ${authUserId} AND negocio_id = ${req.params.negocioId}`
