@@ -3,16 +3,114 @@ import { sql } from "./db"
 export async function runMigrations() {
   // ── Extensiones ───────────────────────────────────────────────────────────
   await sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`
+  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`
 
-  // ── Columnas existentes ───────────────────────────────────────────────────
+  // ── 1. Usuarios ───────────────────────────────────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS usuarios (
+    id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    email TEXT,
+    telefono TEXT,
+    foto_url TEXT,
+    rol TEXT DEFAULT 'cliente',
+    wallet_balance NUMERIC DEFAULT 0,
+    puntos INT DEFAULT 0,
+    referral_code TEXT,
+    eliminado_en TIMESTAMPTZ,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── 2. Viveres / Restaurantes ──────────────────────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS viveres (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    nombre TEXT NOT NULL,
+    categoria TEXT DEFAULT 'Restaurante',
+    logo_url TEXT,
+    banner_url TEXT,
+    direccion TEXT,
+    latitud NUMERIC,
+    longitud NUMERIC,
+    telefono TEXT,
+    esta_abierto BOOLEAN DEFAULT true,
+    status TEXT DEFAULT 'activo',
+    advertencia_calidad BOOLEAN DEFAULT false,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── 3. Productos ───────────────────────────────────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS productos (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    negocio_id TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    descripcion TEXT,
+    precio NUMERIC NOT NULL,
+    imagen_url TEXT,
+    categoria TEXT DEFAULT 'General',
+    disponible BOOLEAN DEFAULT true,
+    agotado BOOLEAN DEFAULT false,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── 4. Repartidores (con Verificación Efímera) ─────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS repartidores (
+    id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    email TEXT,
+    telefono TEXT,
+    foto_url TEXT,
+    vehiculo_tipo TEXT DEFAULT 'moto',
+    vehiculo_placas TEXT,
+    is_verified BOOLEAN DEFAULT false,
+    status TEXT DEFAULT 'pendiente',
+    motivo_rechazo TEXT,
+    latitud NUMERIC,
+    longitud NUMERIC,
+    en_linea BOOLEAN DEFAULT false,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── 5. Pedidos ─────────────────────────────────────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS pedidos (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    cliente_id TEXT NOT NULL,
+    negocio_id TEXT NOT NULL,
+    repartidor_id TEXT,
+    monto_total NUMERIC NOT NULL,
+    subtotal NUMERIC NOT NULL,
+    costo_envio NUMERIC DEFAULT 0,
+    propina NUMERIC DEFAULT 0,
+    status TEXT DEFAULT 'pendiente',
+    tipo_entrega TEXT DEFAULT 'domicilio',
+    direccion_entrega TEXT,
+    latitud_entrega NUMERIC,
+    longitud_entrega NUMERIC,
+    items JSONB,
+    payment_intent_id TEXT,
+    tiempo_estimado_min INT,
+    programado_para TEXT,
+    pago_fallido_en TIMESTAMPTZ,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── 6. Mensajes (Chat) ─────────────────────────────────────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS mensajes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pedido_id TEXT NOT NULL,
+    emisor_id TEXT NOT NULL,
+    receptor_id TEXT NOT NULL,
+    emisor_tipo TEXT DEFAULT 'repartidor',
+    texto TEXT NOT NULL,
+    leido BOOLEAN DEFAULT false,
+    creado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+
+  // ── Columnas adicionales ──────────────────────────────────────────────────
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS payment_intent_id TEXT`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tiempo_estimado_min INT`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_fallido_en TIMESTAMPTZ`
   await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS eliminado_en TIMESTAMPTZ`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS propina NUMERIC DEFAULT 0`
   await sql`ALTER TABLE productos ADD COLUMN IF NOT EXISTS agotado BOOLEAN DEFAULT false`
-
-  // ── Nuevas columnas — pickup, pedidos programados ─────────────────────────
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'domicilio'`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS programado_para TEXT`
 
@@ -65,23 +163,16 @@ export async function runMigrations() {
   )`
   await sql`CREATE INDEX IF NOT EXISTS idx_notif_user ON notificaciones(user_id, creado_en DESC)`
 
-  // ── Mensajes — columna tipo para chat restaurante ─────────────────────────
-  await sql`ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS emisor_tipo TEXT DEFAULT 'repartidor'`
-
-  // ── Índices de pedidos ────────────────────────────────────────────────────
+  // ── Índices ───────────────────────────────────────────────────────────────
   await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_status_creado   ON pedidos(status, creado_en DESC)`
   await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_negocio_status  ON pedidos(negocio_id, status)`
   await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_cliente_status  ON pedidos(cliente_id, status)`
   await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_payment_intent  ON pedidos(payment_intent_id) WHERE payment_intent_id IS NOT NULL`
-  await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_programado ON pedidos(status, programado_para) WHERE programado_para IS NOT NULL`
-
-  // ── Índices de repartidores / negocios ───────────────────────────────────
   await sql`CREATE INDEX IF NOT EXISTS idx_repartidores_status     ON repartidores(status)`
   await sql`CREATE INDEX IF NOT EXISTS idx_viveres_status_abierto  ON viveres(status, esta_abierto)`
 
-  // ── Índices pg_trgm para búsqueda fuzzy ──────────────────────────────────
   await sql`CREATE INDEX IF NOT EXISTS idx_viveres_nombre_trgm   ON viveres   USING gin(nombre gin_trgm_ops)`
   await sql`CREATE INDEX IF NOT EXISTS idx_productos_nombre_trgm ON productos USING gin(nombre gin_trgm_ops)`
 
-  console.log("Migraciones completadas")
+  console.log("Migraciones en Supabase completadas exitosamente")
 }
