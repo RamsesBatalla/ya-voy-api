@@ -18,6 +18,21 @@ router.post("/aprobar-repartidor", requireAdmin, async (req, res) => {
   try {
     const { usuarioId } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
+
+    // Obtener datos de la solicitud
+    const solRows = await sql`SELECT datos FROM solicitudes WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+    const datos = solRows[0]?.datos || {}
+
+    // 1. Crear o activar registro de repartidor
+    await sql`
+      INSERT INTO repartidores (id, usuario_id, nombre, email, telefono, vehiculo_tipo, vehiculo_modelo, vehiculo_placas, disponible, activo)
+      VALUES (${usuarioId}, ${usuarioId}, ${datos.nombre || "Repartidor"}, ${datos.email || ""}, ${datos.telefono || ""}, ${datos.vehiculo_tipo || "moto"}, ${datos.vehiculo_modelo || ""}, ${datos.vehiculo_placas || ""}, true, true)
+      ON CONFLICT (id) DO UPDATE SET disponible = true, activo = true, vehiculo_tipo = ${datos.vehiculo_tipo || "moto"}
+    `
+
+    // 2. Marcar solicitud aprobada y BORRAR DOCUMENTOS (INE/Licencia) por privacidad y espacio
+    await sql`UPDATE solicitudes SET status = 'aprobado', documentos = '{}'::jsonb, razon_rechazo = NULL WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+
     await sendPushToUser(
       sql, usuarioId,
       "¡Fuiste aprobado como repartidor! 🛵",
@@ -33,6 +48,10 @@ router.post("/rechazar-repartidor", requireAdmin, async (req, res) => {
   try {
     const { usuarioId, razon } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
+
+    // Marcar solicitud rechazada y BORRAR DOCUMENTOS (INE/Licencia) por privacidad y espacio
+    await sql`UPDATE solicitudes SET status = 'rechazado', razon_rechazo = ${razon || "Inconsistencia de documentos"}, documentos = '{}'::jsonb WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+
     await sendPushToUser(
       sql, usuarioId,
       "Solicitud de repartidor rechazada",

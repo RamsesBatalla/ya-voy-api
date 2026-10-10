@@ -295,7 +295,7 @@ router.post("/customer", requireAuth, async (req, res) => {
     if (!customerId) {
       const customer = await stripe.customers.create({ email: email || undefined, name: nombre || undefined, metadata: { userId } })
       customerId = customer.id
-      await sql`UPDATE usuarios SET stripe_customer_id = ${customerId} WHERE id = ${userId}`
+      await sql`INSERT INTO usuarios (id, stripe_customer_id) VALUES (${userId}, ${customerId}) ON CONFLICT (id) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id`
     }
     res.json({ customerId })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
@@ -335,3 +335,4 @@ router.delete("/payment-methods/:pmId", requireAuth, async (req, res) => {
 })
 
 export default router
+
