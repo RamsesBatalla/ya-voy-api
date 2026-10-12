@@ -74,6 +74,7 @@ export async function notificarSolicitudRepartidor(datos: {
  * Notificación de Nueva Solicitud de Restaurante
  */
 export async function notificarSolicitudRestaurante(datos: {
+  usuario_id?: string;
   nombre_negocio: string;
   contacto_nombre: string;
   email: string;
@@ -81,15 +82,25 @@ export async function notificarSolicitudRestaurante(datos: {
   categoria?: string;
   direccion?: string;
   logo_url?: string;
+  ine_frente?: string;
+  ine_reverso?: string;
+  selfie?: string;
+  rfc?: string;
 }) {
   const mensaje = `🍳 *¡Nueva Solicitud de Restaurante!*\n\n` +
+    (datos.usuario_id ? `🆔 *ID Usuario:* \`${datos.usuario_id}\`\n` : "") +
     `🏪 *Negocio:* ${datos.nombre_negocio}\n` +
     `👤 *Contacto:* ${datos.contacto_nombre}\n` +
     `📞 *Teléfono:* [${datos.telefono || "No especificado"}](https://wa.me/${(datos.telefono || "").replace(/\D/g, "")})\n` +
     `✉️ *Correo:* ${datos.email}\n` +
     (datos.categoria ? `🏷️ *Categoría:* ${datos.categoria}\n` : "") +
     (datos.direccion ? `📍 *Dirección:* ${datos.direccion}\n` : "") +
-    (datos.logo_url ? `📸 *Foto/Logo:* [Ver Imagen](${datos.logo_url})\n` : "") +
+    (datos.rfc ? `📑 *RFC:* \`${datos.rfc}\`\n` : "") +
+    `\n📄 *Documentos:* \n` +
+    (datos.ine_frente ? `• [INE Frente](${datos.ine_frente})\n` : "") +
+    (datos.ine_reverso ? `• [INE Reverso](${datos.ine_reverso})\n` : "") +
+    (datos.selfie ? `• [Selfie / Foto](${datos.selfie})\n` : "") +
+    (datos.logo_url ? `• [Logo / Fachada](${datos.logo_url})\n` : "") +
     `\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
 
   await sendTelegramAdmin(mensaje);

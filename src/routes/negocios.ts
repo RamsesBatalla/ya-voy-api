@@ -32,13 +32,18 @@ router.post('/solicitud', async (req, res) => {
 
     // Notificación en segundo plano al Administrador
     notificarSolicitudRestaurante({
-      nombre_negocio: datos?.nombre || 'Nuevo Restaurante',
+      usuario_id: userId,
+      nombre_negocio: datos?.nombre_negocio || datos?.nombre || 'Nuevo Restaurante',
       contacto_nombre: datos?.contacto || datos?.email || 'Sin contacto',
       email: datos?.email || '',
       telefono: datos?.telefono || '',
-      categoria: datos?.categoria,
+      categoria: datos?.tipo_negocio || datos?.categoria || 'Restaurante',
       direccion: datos?.direccion,
+      rfc: datos?.rfc || documentos?.rfc,
       logo_url: documentos?.logo || documentos?.foto,
+      ine_frente: documentos?.ine_frente,
+      ine_reverso: documentos?.ine_reverso,
+      selfie: documentos?.selfie,
     }).catch(err => logError(err, 'notificarSolicitudRestaurante'));
 
     res.json({ ok: true, solicitud: rows[0] });

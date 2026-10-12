@@ -44,6 +44,11 @@ export async function requireAuthRepartidor(req: Request, res: Response, next: N
 }
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const adminSecret = process.env.ADMIN_SECRET || ""
+  const secretHeader = req.headers["x-admin-secret"] || req.headers["authorization"]?.replace("Bearer ", "")
+  if (adminSecret && secretHeader === adminSecret) {
+    return next()
+  }
   const uid = await extractUid(req)
   if (!uid || !ADMIN_IDS.includes(uid)) {
     res.status(403).json({ error: "No autorizado" }); return

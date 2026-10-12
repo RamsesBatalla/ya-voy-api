@@ -62,18 +62,108 @@ router.post("/rechazar-repartidor", requireAdmin, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+// GET /api/admin/solicitudes  ?tipo=negocio|repartidor&status=pendiente
+router.get("/solicitudes", requireAdmin, async (req, res) => {
+  try {
+    const tipo = req.query.tipo as string
+    const status = (req.query.status as string) || "pendiente"
+
+    let rows
+    if (tipo) {
+      rows = await sql`
+        SELECT s.*, u.email as usuario_email, u.nombre as usuario_nombre
+        FROM solicitudes s
+        LEFT JOIN usuarios u ON u.id = s.usuario_id
+        WHERE s.tipo = ${tipo} AND s.status = ${status}
+        ORDER BY s.creado_en DESC
+      `
+    } else {
+      rows = await sql`
+        SELECT s.*, u.email as usuario_email, u.nombre as usuario_nombre
+        FROM solicitudes s
+        LEFT JOIN usuarios u ON u.id = s.usuario_id
+        WHERE s.status = ${status}
+        ORDER BY s.creado_en DESC
+      `
+    }
+    res.json(rows)
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 // POST /api/admin/aprobar-restaurante  { usuarioId, nombreNegocio }
 router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
   try {
     const { usuarioId, nombreNegocio } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
+
+    // 1. Obtener la solicitud del restaurante
+    const solRows = await sql`
+      SELECT datos, documentos FROM solicitudes
+      WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
+      ORDER BY creado_en DESC LIMIT 1
+    `
+    const sol = solRows[0]
+    const datos = sol?.datos || {}
+    const documentos = sol?.documentos || {}
+
+    // 2. Crear o actualizar el registro en viveres
+    const existing = await sql`SELECT id FROM viveres WHERE owner_id = ${usuarioId} LIMIT 1`
+    let negocioId = existing[0]?.id
+
+    const nombre = datos.nombre_negocio || datos.nombre || nombreNegocio || "Mi Restaurante"
+    const categoria = datos.tipo_negocio || datos.categoria || "Restaurante"
+    const direccion = datos.direccion || ""
+    const lat = datos.lat != null ? Number(datos.lat) : null
+    const lng = datos.lng != null ? Number(datos.lng) : null
+    const telefono = datos.telefono || ""
+    const logoUrl = documentos.logo || documentos.foto || documentos.selfie || null
+
+    if (!negocioId) {
+      const inserted = await sql`
+        INSERT INTO viveres (
+          owner_id, nombre, categoria, direccion, latitud, longitud,
+          telefono, logo_url, esta_abierto, status
+        ) VALUES (
+          ${usuarioId}, ${nombre}, ${categoria}, ${direccion}, ${lat}, ${lng},
+          ${telefono}, ${logoUrl}, true, 'aprobado'
+        ) RETURNING id
+      `
+      negocioId = inserted[0]?.id
+    } else {
+      await sql`
+        UPDATE viveres SET
+          nombre = ${nombre},
+          categoria = ${categoria},
+          direccion = COALESCE(NULLIF(${direccion}, ''), direccion),
+          latitud = COALESCE(${lat}, latitud),
+          longitud = COALESCE(${lng}, longitud),
+          telefono = COALESCE(NULLIF(${telefono}, ''), telefono),
+          logo_url = COALESCE(${logoUrl}, logo_url),
+          status = 'aprobado',
+          esta_abierto = true
+        WHERE id = ${negocioId}
+      `
+    }
+
+    // 3. Actualizar rol del usuario a negocio
+    await sql`UPDATE usuarios SET rol = 'negocio' WHERE id = ${usuarioId}`
+
+    // 4. Marcar solicitud como aprobada
+    await sql`
+      UPDATE solicitudes
+      SET status = 'aprobado', razon_rechazo = NULL
+      WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
+    `
+
+    // 5. Enviar notificación push al usuario
     await sendPushToUser(
       sql, usuarioId,
-      `¡${nombreNegocio || "Tu negocio"} fue aprobado! 🎉`,
-      "Ya apareces en la app. Completa tu menú y empieza a recibir pedidos.",
+      `¡${nombre} fue aprobado! 🎉`,
+      "Ya apareces en Ya Voy. Completa tu menú y empieza a recibir pedidos.",
       { tipo: "aprobacion", rol: "restaurante" }
-    )
-    res.json({ ok: true })
+    ).catch(() => {})
+
+    res.json({ ok: true, negocioId })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -82,12 +172,22 @@ router.post("/rechazar-restaurante", requireAdmin, async (req, res) => {
   try {
     const { usuarioId, razon } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
+
+    // 1. Marcar solicitud rechazada
+    await sql`
+      UPDATE solicitudes
+      SET status = 'rechazado', razon_rechazo = ${razon || "Documentación no legible o datos inconsistentes"}
+      WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
+    `
+
+    // 2. Enviar notificación push al usuario
     await sendPushToUser(
       sql, usuarioId,
       "Solicitud de negocio rechazada",
-      razon || "Tu solicitud no fue aprobada en este momento.",
+      razon || "Tu solicitud no fue aprobada en este momento. Revisa la información y vuelve a intentar.",
       { tipo: "rechazo", rol: "restaurante" }
-    )
+    ).catch(() => {})
+
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
