@@ -493,7 +493,7 @@ router.patch("/pedidos/:id/rating", requireAuthUsuario, async (req, res) => {
 // GET /api/usuario/perfil/:userId
 router.get("/perfil/:userId", async (req, res) => {
   try {
-    const rows = await sql`SELECT foto_perfil FROM usuarios WHERE id = ${req.params.userId}`
+    const rows = await sql`SELECT id, nombre, email, telefono, foto_perfil, foto_url FROM usuarios WHERE id = ${req.params.userId}`
     res.json(rows[0] || {})
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -502,8 +502,14 @@ router.get("/perfil/:userId", async (req, res) => {
 router.patch("/perfil/:userId", requireAuthUsuario, async (req, res) => {
   if ((req as any).usrUserId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
-    const { foto_perfil } = req.body
-    await sql`UPDATE usuarios SET foto_perfil = ${foto_perfil} WHERE id = ${req.params.userId}`
+    const { nombre, telefono, foto_perfil } = req.body
+    await sql`
+      UPDATE usuarios SET 
+        nombre = COALESCE(NULLIF(${nombre}, ''), nombre),
+        telefono = COALESCE(NULLIF(${telefono}, ''), telefono),
+        foto_perfil = COALESCE(${foto_perfil}, foto_perfil)
+      WHERE id = ${req.params.userId}
+    `
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
