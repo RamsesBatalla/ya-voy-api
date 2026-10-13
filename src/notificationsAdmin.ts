@@ -1,9 +1,9 @@
 import { logError } from "./logger";
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8756989292:AAHqQXQTqZBPZuEtY3RSbERf3HMwU5-HVWk";
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "1269146838";
 export const ADMIN_PHONE_WHATSAPP = "527641311374";
-export const ADMIN_TELEGRAM_USER = "Ramses_Batalla";
+export const ADMIN_TELEGRAM_USER = "ramses_batalla";
 
 /**
  * Envía un mensaje a Telegram del Administrador si las credenciales están configuradas.
