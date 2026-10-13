@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { aprobarRestaurante, rechazarRestaurante } from "../services/solicitudesService";
+import {
+  aprobarRestaurante,
+  rechazarRestaurante,
+  aprobarRepartidor,
+  rechazarRepartidor,
+} from "../services/solicitudesService";
 import { logError } from "../logger";
 
 const router = Router();
@@ -107,6 +112,52 @@ router.post("/webhook", async (req, res) => {
         `👤 *Rechazado por:* @${cq.from.username || "Ramses"}\n` +
         `📅 *Fecha:* ${horaActual}\n` +
         `🔒 *Privacidad:* Documentos (INE y Selfie) *eliminados permanentemente* de Supabase Storage.`;
+
+      await editTelegramMessage(ADMIN_CHAT_ID, messageId, updatedText);
+    } else {
+      await answerCallbackQuery(cq.id, `⚠️ Error: ${result.error || "Solicitud ya procesada"}`, true);
+    }
+    return;
+  }
+
+  // 3. APROBAR REPARTIDOR
+  if (data.startsWith("aprob_rep:")) {
+    const solicitudId = data.replace("aprob_rep:", "");
+    const result = await aprobarRepartidor(solicitudId);
+
+    if (result.ok) {
+      await answerCallbackQuery(cq.id, `✅ ¡Repartidor "${result.nombre}" aprobado con éxito! 🛵`);
+
+      const horaActual = new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City" });
+      const updatedText = `${originalText}\n\n` +
+        `══════════════════════════\n` +
+        `✅ *ESTADO: APROBADO*\n` +
+        `👤 *Aprobado por:* @${cq.from.username || "Ramses"}\n` +
+        `📅 *Fecha:* ${horaActual}\n` +
+        `🔒 *Privacidad:* Documentos de identidad (INE, Licencia, Selfie) *eliminados permanentemente* de Supabase Storage.`;
+
+      await editTelegramMessage(ADMIN_CHAT_ID, messageId, updatedText);
+    } else {
+      await answerCallbackQuery(cq.id, `⚠️ Error al aprobar repartidor: ${result.error || "Solicitud ya procesada"}`, true);
+    }
+    return;
+  }
+
+  // 4. RECHAZAR REPARTIDOR
+  if (data.startsWith("rech_rep:")) {
+    const solicitudId = data.replace("rech_rep:", "");
+    const result = await rechazarRepartidor(solicitudId);
+
+    if (result.ok) {
+      await answerCallbackQuery(cq.id, `❌ Solicitud de repartidor rechazada. Documentos eliminados.`);
+
+      const horaActual = new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City" });
+      const updatedText = `${originalText}\n\n` +
+        `══════════════════════════\n` +
+        `❌ *ESTADO: RECHAZADO*\n` +
+        `👤 *Rechazado por:* @${cq.from.username || "Ramses"}\n` +
+        `📅 *Fecha:* ${horaActual}\n` +
+        `🔒 *Privacidad:* Documentos de identidad (INE, Licencia, Selfie) *eliminados permanentemente* de Supabase Storage.`;
 
       await editTelegramMessage(ADMIN_CHAT_ID, messageId, updatedText);
     } else {

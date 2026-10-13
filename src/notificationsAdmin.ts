@@ -51,6 +51,8 @@ export function buildWhatsAppLink(phone: string, message: string): string {
  * Notificación de Nueva Solicitud de Repartidor
  */
 export async function notificarSolicitudRepartidor(datos: {
+  solicitud_id?: string;
+  usuario_id?: string;
   nombre: string;
   email: string;
   telefono: string;
@@ -63,18 +65,34 @@ export async function notificarSolicitudRepartidor(datos: {
   tarjeta_url?: string;
 }) {
   const mensaje = `🛵 *¡Nueva Solicitud de Repartidor!*\n\n` +
+    (datos.usuario_id ? `🆔 *ID Usuario:* \`${datos.usuario_id}\`\n` : "") +
+    (datos.solicitud_id ? `📋 *Solicitud ID:* \`${datos.solicitud_id}\`\n` : "") +
     `👤 *Nombre:* ${datos.nombre}\n` +
     `📞 *Teléfono:* [${datos.telefono || "No especificado"}](https://wa.me/${(datos.telefono || "").replace(/\D/g, "")})\n` +
     `✉️ *Correo:* ${datos.email}\n` +
     `🏍️ *Vehículo:* ${datos.vehiculo_tipo.toUpperCase()} ${datos.vehiculo_modelo || ""} ${datos.vehiculo_placas ? `(Placas: ${datos.vehiculo_placas})` : ""}\n\n` +
-    `📄 *Documentos:* \n` +
+    `📄 *Documentos (Temporales para Validación):* \n` +
     (datos.ine_frente ? `• [INE Frente](${datos.ine_frente})\n` : "") +
     (datos.ine_reverso ? `• [INE Reverso](${datos.ine_reverso})\n` : "") +
-    (datos.selfie ? `• [Selfie](${datos.selfie})\n` : "") +
-    (datos.tarjeta_url ? `• [Tarjeta de Circulación](${datos.tarjeta_url})\n` : "") +
-    `\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
+    (datos.selfie ? `• [Selfie / Rostro](${datos.selfie})\n` : "") +
+    (datos.tarjeta_url ? `• [Tarjeta de Circulación / Licencia](${datos.tarjeta_url})\n` : "") +
+    `\n🔒 *Nota de Privacidad:* Al presionar Aprobar o Rechazar, los documentos de identidad sensibles se eliminarán permanentemente de los servidores.` +
+    `\n\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
 
-  await sendTelegramAdmin(mensaje);
+  const buttons: any[] = [];
+  if (datos.solicitud_id) {
+    buttons.push([
+      { text: "✅ Aprobar Repartidor", callback_data: `aprob_rep:${datos.solicitud_id}` },
+      { text: "❌ Rechazar", callback_data: `rech_rep:${datos.solicitud_id}` },
+    ]);
+  }
+  if (datos.telefono) {
+    buttons.push([
+      { text: "💬 Hablar por WhatsApp", url: `https://wa.me/52${datos.telefono.replace(/\D/g, "")}` }
+    ]);
+  }
+
+  await sendTelegramAdmin(mensaje, "Markdown", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
 }
 
 /**

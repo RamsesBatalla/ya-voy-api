@@ -23,15 +23,20 @@ router.post("/solicitud", async (req, res) => {
     const { userId, email, nombre, telefono, vehiculo_tipo, vehiculo_modelo, vehiculo_placas, ine_frente_url, ine_reverso_url, selfie_url, tarjeta_url } = req.body;
     const datos = JSON.stringify({ nombre, telefono, email, vehiculo_tipo, vehiculo_modelo, vehiculo_placas });
     const docs   = JSON.stringify({ ine_frente: ine_frente_url, ine_reverso: ine_reverso_url, selfie: selfie_url, tarjeta_url });
+    let solicitudId = "";
     const existing = await sql`SELECT id FROM solicitudes WHERE usuario_id = ${userId} AND tipo = 'repartidor'`;
     if (existing.length > 0) {
+      solicitudId = existing[0].id;
       await sql`UPDATE solicitudes SET datos = ${datos}::jsonb, documentos = ${docs}::jsonb, status = 'pendiente', razon_rechazo = NULL WHERE usuario_id = ${userId} AND tipo = 'repartidor'`;
     } else {
-      await sql`INSERT INTO solicitudes (id, usuario_id, tipo, datos, documentos, status) VALUES (gen_random_uuid()::text, ${userId}, 'repartidor', ${datos}::jsonb, ${docs}::jsonb, 'pendiente')`;
+      const ins = await sql`INSERT INTO solicitudes (id, usuario_id, tipo, datos, documentos, status) VALUES (gen_random_uuid()::text, ${userId}, 'repartidor', ${datos}::jsonb, ${docs}::jsonb, 'pendiente') RETURNING id`;
+      solicitudId = ins[0]?.id || "";
     }
 
     // Notificación en segundo plano al Administrador
     notificarSolicitudRepartidor({
+      solicitud_id: solicitudId,
+      usuario_id: userId,
       nombre: nombre || "Sin nombre",
       email: email || "",
       telefono: telefono || "",

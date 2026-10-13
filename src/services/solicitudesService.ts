@@ -196,3 +196,92 @@ export async function rechazarRestaurante(solicitudId: string, razon?: string): 
     return { ok: false, nombre: "", error: err.message };
   }
 }
+
+/**
+ * Lógica integral para aprobar un Repartidor
+ */
+export async function aprobarRepartidor(solicitudId: string): Promise<{ ok: boolean; nombre: string; error?: string }> {
+  try {
+    const solRows = await sql`
+      SELECT * FROM solicitudes WHERE id = ${solicitudId} AND tipo = 'repartidor' LIMIT 1
+    `;
+    if (solRows.length === 0) return { ok: false, nombre: "", error: "Solicitud no encontrada" };
+
+    const sol = solRows[0];
+    const usuarioId = sol.usuario_id;
+    const datos = sol.datos || {};
+    const nombre = datos.nombre || "Repartidor";
+
+    // 1. Crear o activar registro de repartidor
+    await sql`
+      INSERT INTO repartidores (id, usuario_id, nombre, email, telefono, vehiculo_tipo, vehiculo_modelo, vehiculo_placas, disponible, activo)
+      VALUES (${usuarioId}, ${usuarioId}, ${nombre}, ${datos.email || ""}, ${datos.telefono || ""}, ${datos.vehiculo_tipo || "moto"}, ${datos.vehiculo_modelo || ""}, ${datos.vehiculo_placas || ""}, true, true)
+      ON CONFLICT (id) DO UPDATE SET disponible = true, activo = true, vehiculo_tipo = ${datos.vehiculo_tipo || "moto"}
+    `;
+
+    // 2. Rol usuario a 'repartidor'
+    await sql`UPDATE usuarios SET rol = 'repartidor' WHERE id = ${usuarioId}`;
+
+    // 3. Marcar solicitud como aprobada
+    await sql`
+      UPDATE solicitudes
+      SET status = 'aprobado', razon_rechazo = NULL
+      WHERE id = ${solicitudId}
+    `;
+
+    // 4. ELIMINACIÓN DE PRIVACIDAD: Borrar INE, Licencia y Selfie físicamente de Supabase Storage
+    await purgeSolicitudSensitiveDocs(solicitudId);
+
+    // 5. Notificación push
+    sendPushToUser(
+      sql, usuarioId,
+      "¡Fuiste aprobado como repartidor! 🛵",
+      "Ya puedes conectarte y empezar a recibir pedidos.",
+      { tipo: "aprobacion", rol: "repartidor" }
+    ).catch(() => {});
+
+    return { ok: true, nombre };
+  } catch (err: any) {
+    logError(err, "aprobarRepartidor");
+    return { ok: false, nombre: "", error: err.message };
+  }
+}
+
+/**
+ * Lógica integral para rechazar un Repartidor
+ */
+export async function rechazarRepartidor(solicitudId: string, razon?: string): Promise<{ ok: boolean; nombre: string; error?: string }> {
+  try {
+    const solRows = await sql`
+      SELECT * FROM solicitudes WHERE id = ${solicitudId} AND tipo = 'repartidor' LIMIT 1
+    `;
+    if (solRows.length === 0) return { ok: false, nombre: "", error: "Solicitud no encontrada" };
+
+    const sol = solRows[0];
+    const usuarioId = sol.usuario_id;
+    const nombre = sol.datos?.nombre || "Repartidor";
+
+    // 1. Marcar solicitud como rechazada
+    await sql`
+      UPDATE solicitudes
+      SET status = 'rechazado', razon_rechazo = ${razon || "Documentación no legible o datos inconsistentes"}
+      WHERE id = ${solicitudId}
+    `;
+
+    // 2. ELIMINACIÓN DE PRIVACIDAD: Borrar INE, Licencia y Selfie de Supabase Storage
+    await purgeSolicitudSensitiveDocs(solicitudId);
+
+    // 3. Notificación push
+    sendPushToUser(
+      sql, usuarioId,
+      "Solicitud de repartidor rechazada",
+      razon || "Tu solicitud no fue aprobada. Revisa tus documentos y vuelve a intentarlo.",
+      { tipo: "rechazo", rol: "repartidor" }
+    ).catch(() => {});
+
+    return { ok: true, nombre };
+  } catch (err: any) {
+    logError(err, "rechazarRepartidor");
+    return { ok: false, nombre: "", error: err.message };
+  }
+}
