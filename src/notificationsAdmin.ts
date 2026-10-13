@@ -47,6 +47,14 @@ export function buildWhatsAppLink(phone: string, message: string): string {
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
 }
 
+function escapeHtml(text?: string | null): string {
+  if (!text) return "";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 /**
  * Notificación de Nueva Solicitud de Repartidor
  */
@@ -64,20 +72,27 @@ export async function notificarSolicitudRepartidor(datos: {
   selfie?: string;
   tarjeta_url?: string;
 }) {
-  const mensaje = `🛵 *¡Nueva Solicitud de Repartidor!*\n\n` +
-    (datos.usuario_id ? `🆔 *ID Usuario:* \`${datos.usuario_id}\`\n` : "") +
-    (datos.solicitud_id ? `📋 *Solicitud ID:* \`${datos.solicitud_id}\`\n` : "") +
-    `👤 *Nombre:* ${datos.nombre}\n` +
-    `📞 *Teléfono:* [${datos.telefono || "No especificado"}](https://wa.me/${(datos.telefono || "").replace(/\D/g, "")})\n` +
-    `✉️ *Correo:* ${datos.email}\n` +
-    `🏍️ *Vehículo:* ${datos.vehiculo_tipo.toUpperCase()} ${datos.vehiculo_modelo || ""} ${datos.vehiculo_placas ? `(Placas: ${datos.vehiculo_placas})` : ""}\n\n` +
-    `📄 *Documentos (Temporales para Validación):* \n` +
-    (datos.ine_frente ? `• [INE Frente](${datos.ine_frente})\n` : "") +
-    (datos.ine_reverso ? `• [INE Reverso](${datos.ine_reverso})\n` : "") +
-    (datos.selfie ? `• [Selfie / Rostro](${datos.selfie})\n` : "") +
-    (datos.tarjeta_url ? `• [Tarjeta de Circulación / Licencia](${datos.tarjeta_url})\n` : "") +
-    `\n🔒 *Nota de Privacidad:* Al presionar Aprobar o Rechazar, los documentos de identidad sensibles se eliminarán permanentemente de los servidores.` +
-    `\n\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
+  const cleanPhone = (datos.telefono || "").replace(/\D/g, "");
+  const waUrl = cleanPhone.startsWith("52") || cleanPhone.startsWith("1")
+    ? `https://wa.me/${cleanPhone}`
+    : `https://wa.me/52${cleanPhone}`;
+
+  let mensaje = `🛵 <b>¡Nueva Solicitud de Repartidor!</b>\n\n`;
+  if (datos.usuario_id) mensaje += `🆔 <b>ID Usuario:</b> <code>${escapeHtml(datos.usuario_id)}</code>\n`;
+  if (datos.solicitud_id) mensaje += `📋 <b>Solicitud ID:</b> <code>${escapeHtml(datos.solicitud_id)}</code>\n`;
+  mensaje += `👤 <b>Nombre:</b> ${escapeHtml(datos.nombre)}\n`;
+  mensaje += `📞 <b>Teléfono:</b> <a href="${waUrl}">${escapeHtml(datos.telefono || "No especificado")}</a>\n`;
+  mensaje += `✉️ <b>Correo:</b> ${escapeHtml(datos.email)}\n`;
+  mensaje += `🏍️ <b>Vehículo:</b> ${escapeHtml(datos.vehiculo_tipo.toUpperCase())} ${escapeHtml(datos.vehiculo_modelo || "")} ${datos.vehiculo_placas ? `(Placas: ${escapeHtml(datos.vehiculo_placas)})` : ""}\n\n`;
+
+  mensaje += `📄 <b>Documentos (Temporales para Validación):</b>\n`;
+  if (datos.ine_frente) mensaje += `• <a href="${datos.ine_frente}">INE Frente</a>\n`;
+  if (datos.ine_reverso) mensaje += `• <a href="${datos.ine_reverso}">INE Reverso</a>\n`;
+  if (datos.selfie) mensaje += `• <a href="${datos.selfie}">Selfie / Rostro</a>\n`;
+  if (datos.tarjeta_url) mensaje += `• <a href="${datos.tarjeta_url}">Tarjeta de Circulación / Licencia</a>\n`;
+
+  mensaje += `\n🔒 <i>Nota de Privacidad: Al presionar Aprobar o Rechazar, los documentos de identidad sensibles se eliminarán permanentemente de los servidores.</i>\n\n`;
+  mensaje += `💬 <b>Admin:</b> <a href="https://t.me/${ADMIN_TELEGRAM_USER}">@${ADMIN_TELEGRAM_USER}</a> • <a href="https://wa.me/${ADMIN_PHONE_WHATSAPP}">WhatsApp</a>`;
 
   const buttons: any[] = [];
   if (datos.solicitud_id) {
@@ -86,13 +101,13 @@ export async function notificarSolicitudRepartidor(datos: {
       { text: "❌ Rechazar", callback_data: `rech_rep:${datos.solicitud_id}` },
     ]);
   }
-  if (datos.telefono) {
+  if (cleanPhone) {
     buttons.push([
-      { text: "💬 Hablar por WhatsApp", url: `https://wa.me/52${datos.telefono.replace(/\D/g, "")}` }
+      { text: "💬 Hablar por WhatsApp", url: waUrl }
     ]);
   }
 
-  await sendTelegramAdmin(mensaje, "Markdown", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
+  await sendTelegramAdmin(mensaje, "HTML", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
 }
 
 /**
@@ -113,23 +128,30 @@ export async function notificarSolicitudRestaurante(datos: {
   selfie?: string;
   rfc?: string;
 }) {
-  const mensaje = `🍳 *¡Nueva Solicitud de Restaurante!*\n\n` +
-    (datos.usuario_id ? `🆔 *ID Usuario:* \`${datos.usuario_id}\`\n` : "") +
-    (datos.solicitud_id ? `📋 *Solicitud ID:* \`${datos.solicitud_id}\`\n` : "") +
-    `🏪 *Negocio:* ${datos.nombre_negocio}\n` +
-    `👤 *Contacto:* ${datos.contacto_nombre}\n` +
-    `📞 *Teléfono:* [${datos.telefono || "No especificado"}](https://wa.me/${(datos.telefono || "").replace(/\D/g, "")})\n` +
-    `✉️ *Correo:* ${datos.email}\n` +
-    (datos.categoria ? `🏷️ *Categoría:* ${datos.categoria}\n` : "") +
-    (datos.direccion ? `📍 *Dirección:* ${datos.direccion}\n` : "") +
-    (datos.rfc ? `📑 *RFC:* \`${datos.rfc}\`\n` : "") +
-    `\n📄 *Documentos (Temporales para Validación):* \n` +
-    (datos.ine_frente ? `• [INE Frente](${datos.ine_frente})\n` : "") +
-    (datos.ine_reverso ? `• [INE Reverso](${datos.ine_reverso})\n` : "") +
-    (datos.selfie ? `• [Selfie / Rostro](${datos.selfie})\n` : "") +
-    (datos.logo_url ? `• [Logo / Fachada](${datos.logo_url})\n` : "") +
-    `\n🔒 *Nota de Privacidad:* Al presionar Aprobar o Rechazar, los documentos sensibles (INE y Selfie) se eliminarán permanentemente de los servidores.` +
-    `\n\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
+  const cleanPhone = (datos.telefono || "").replace(/\D/g, "");
+  const waUrl = cleanPhone.startsWith("52") || cleanPhone.startsWith("1")
+    ? `https://wa.me/${cleanPhone}`
+    : `https://wa.me/52${cleanPhone}`;
+
+  let mensaje = `🍳 <b>¡Nueva Solicitud de Restaurante!</b>\n\n`;
+  if (datos.usuario_id) mensaje += `🆔 <b>ID Usuario:</b> <code>${escapeHtml(datos.usuario_id)}</code>\n`;
+  if (datos.solicitud_id) mensaje += `📋 <b>Solicitud ID:</b> <code>${escapeHtml(datos.solicitud_id)}</code>\n`;
+  mensaje += `🏪 <b>Negocio:</b> ${escapeHtml(datos.nombre_negocio)}\n`;
+  mensaje += `👤 <b>Contacto:</b> ${escapeHtml(datos.contacto_nombre)}\n`;
+  mensaje += `📞 <b>Teléfono:</b> <a href="${waUrl}">${escapeHtml(datos.telefono || "No especificado")}</a>\n`;
+  mensaje += `✉️ <b>Correo:</b> ${escapeHtml(datos.email)}\n`;
+  if (datos.categoria) mensaje += `🏷️ <b>Categoría:</b> ${escapeHtml(datos.categoria)}\n`;
+  if (datos.direccion) mensaje += `📍 <b>Dirección:</b> ${escapeHtml(datos.direccion)}\n`;
+  if (datos.rfc) mensaje += `📑 <b>RFC:</b> <code>${escapeHtml(datos.rfc)}</code>\n`;
+
+  mensaje += `\n📄 <b>Documentos (Temporales para Validación):</b>\n`;
+  if (datos.ine_frente) mensaje += `• <a href="${datos.ine_frente}">INE Frente</a>\n`;
+  if (datos.ine_reverso) mensaje += `• <a href="${datos.ine_reverso}">INE Reverso</a>\n`;
+  if (datos.selfie) mensaje += `• <a href="${datos.selfie}">Selfie / Rostro</a>\n`;
+  if (datos.logo_url) mensaje += `• <a href="${datos.logo_url}">Logo / Fachada</a>\n`;
+
+  mensaje += `\n🔒 <i>Nota de Privacidad: Al presionar Aprobar o Rechazar, los documentos sensibles (INE y Selfie) se eliminarán permanentemente de los servidores.</i>\n\n`;
+  mensaje += `💬 <b>Admin:</b> <a href="https://t.me/${ADMIN_TELEGRAM_USER}">@${ADMIN_TELEGRAM_USER}</a> • <a href="https://wa.me/${ADMIN_PHONE_WHATSAPP}">WhatsApp</a>`;
 
   const buttons: any[] = [];
   if (datos.solicitud_id) {
@@ -138,13 +160,13 @@ export async function notificarSolicitudRestaurante(datos: {
       { text: "❌ Rechazar", callback_data: `rech_res:${datos.solicitud_id}` },
     ]);
   }
-  if (datos.telefono) {
+  if (cleanPhone) {
     buttons.push([
-      { text: "💬 Hablar por WhatsApp", url: `https://wa.me/52${datos.telefono.replace(/\D/g, "")}` }
+      { text: "💬 Hablar por WhatsApp", url: waUrl }
     ]);
   }
 
-  await sendTelegramAdmin(mensaje, "Markdown", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
+  await sendTelegramAdmin(mensaje, "HTML", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
 }
 
 /**

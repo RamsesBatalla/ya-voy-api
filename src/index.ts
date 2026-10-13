@@ -29,6 +29,7 @@ import { createServer } from "http"
 import { initWebSocket } from "./websocket"
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3001;
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -67,19 +68,20 @@ app.use(cors({ origin: corsOrigin, credentials: true }));
 // ── Rate limiting (solo en producción) ───────────────────────────────────────
 
 if (!isDev) {
-  // Global: 300 req / 15 min por IP
+  // Global: 1500 req / 15 min por IP real del cliente
   app.use(rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 1500,
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.path === "/api/health" || req.path === "/api/mantenimiento",
     message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
   }));
 
-  // Endpoints sensibles: 30 req / 15 min
+  // Endpoints sensibles: 100 req / 15 min
   const limitEstricto = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 30,
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Demasiadas solicitudes, intenta en unos minutos" },

@@ -23,6 +23,7 @@ export async function runMigrations() {
   // ── 2. Viveres / Restaurantes ──────────────────────────────────────────────
   await sql`CREATE TABLE IF NOT EXISTS viveres (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    owner_id TEXT,
     nombre TEXT NOT NULL,
     categoria TEXT DEFAULT 'Restaurante',
     logo_url TEXT,
@@ -36,6 +37,31 @@ export async function runMigrations() {
     advertencia_calidad BOOLEAN DEFAULT false,
     creado_en TIMESTAMPTZ DEFAULT NOW()
   )`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS owner_id TEXT`
+  await sql`CREATE INDEX IF NOT EXISTS idx_viveres_owner_id ON viveres(owner_id)`
+
+  // ── 2.1 Solicitudes de Afiliación (Restaurantes y Repartidores) ────────────
+  await sql`CREATE TABLE IF NOT EXISTS solicitudes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    usuario_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendiente',
+    datos JSONB,
+    documentos JSONB,
+    razon_rechazo TEXT,
+    creado_en TIMESTAMPTZ DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ DEFAULT NOW()
+  )`
+  await sql`CREATE INDEX IF NOT EXISTS idx_solicitudes_usuario ON solicitudes(usuario_id, creado_en DESC)`
+  await sql`CREATE INDEX IF NOT EXISTS idx_solicitudes_status ON solicitudes(status, tipo)`
+
+  // ── 2.2 Tokens de Dispositivos (Push Notifications) ───────────────────────
+  await sql`CREATE TABLE IF NOT EXISTS device_tokens (
+    user_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`
+  await sql`CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id)`
 
   // ── 3. Productos ───────────────────────────────────────────────────────────
   await sql`CREATE TABLE IF NOT EXISTS productos (
