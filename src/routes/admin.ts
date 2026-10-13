@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { sql } from "../db"
 import { sendPushToUser } from "../firebase"
 import { requireAdmin } from "../middleware/auth"
+import { purgeSolicitudSensitiveDocs } from "../services/solicitudesService"
 
 const router = Router()
 
@@ -20,7 +21,7 @@ router.post("/aprobar-repartidor", requireAdmin, async (req, res) => {
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
 
     // Obtener datos de la solicitud
-    const solRows = await sql`SELECT datos FROM solicitudes WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+    const solRows = await sql`SELECT id, datos FROM solicitudes WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor' ORDER BY creado_en DESC LIMIT 1`
     const datos = solRows[0]?.datos || {}
 
     // 1. Crear o activar registro de repartidor
@@ -30,8 +31,11 @@ router.post("/aprobar-repartidor", requireAdmin, async (req, res) => {
       ON CONFLICT (id) DO UPDATE SET disponible = true, activo = true, vehiculo_tipo = ${datos.vehiculo_tipo || "moto"}
     `
 
-    // 2. Marcar solicitud aprobada y BORRAR DOCUMENTOS (INE/Licencia) por privacidad y espacio
-    await sql`UPDATE solicitudes SET status = 'aprobado', documentos = '{}'::jsonb, razon_rechazo = NULL WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+    // 2. Marcar solicitud aprobada
+    await sql`UPDATE solicitudes SET status = 'aprobado', razon_rechazo = NULL WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+
+    // 3. BORRAR DOCUMENTOS (INE/Licencia/Selfie) física y lógicamente de Supabase Storage por privacidad
+    if (solRows[0]?.id) await purgeSolicitudSensitiveDocs(solRows[0].id)
 
     await sendPushToUser(
       sql, usuarioId,
@@ -49,8 +53,13 @@ router.post("/rechazar-repartidor", requireAdmin, async (req, res) => {
     const { usuarioId, razon } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
 
-    // Marcar solicitud rechazada y BORRAR DOCUMENTOS (INE/Licencia) por privacidad y espacio
-    await sql`UPDATE solicitudes SET status = 'rechazado', razon_rechazo = ${razon || "Inconsistencia de documentos"}, documentos = '{}'::jsonb WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+    const solRows = await sql`SELECT id FROM solicitudes WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor' ORDER BY creado_en DESC LIMIT 1`
+
+    // Marcar solicitud rechazada
+    await sql`UPDATE solicitudes SET status = 'rechazado', razon_rechazo = ${razon || "Inconsistencia de documentos"} WHERE usuario_id = ${usuarioId} AND tipo = 'repartidor'`
+
+    // BORRAR DOCUMENTOS (INE/Licencia/Selfie) física y lógicamente de Supabase Storage por privacidad
+    if (solRows[0]?.id) await purgeSolicitudSensitiveDocs(solRows[0].id)
 
     await sendPushToUser(
       sql, usuarioId,
@@ -98,7 +107,7 @@ router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
 
     // 1. Obtener la solicitud del restaurante
     const solRows = await sql`
-      SELECT datos, documentos FROM solicitudes
+      SELECT id, datos, documentos FROM solicitudes
       WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
       ORDER BY creado_en DESC LIMIT 1
     `
@@ -116,7 +125,7 @@ router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
     const lat = datos.lat != null ? Number(datos.lat) : null
     const lng = datos.lng != null ? Number(datos.lng) : null
     const telefono = datos.telefono || ""
-    const logoUrl = documentos.logo || documentos.foto || documentos.selfie || null
+    const logoUrl = documentos.logo || documentos.foto || null
 
     if (!negocioId) {
       const inserted = await sql`
@@ -155,7 +164,12 @@ router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
       WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
     `
 
-    // 5. Enviar notificación push al usuario
+    // 5. BORRAR DOCUMENTOS SENSIBLES (INE / Selfie) de Supabase Storage por privacidad
+    if (sol?.id) {
+      await purgeSolicitudSensitiveDocs(sol.id).catch(() => {})
+    }
+
+    // 6. Enviar notificación push al usuario
     await sendPushToUser(
       sql, usuarioId,
       `¡${nombre} fue aprobado! 🎉`,
@@ -173,6 +187,12 @@ router.post("/rechazar-restaurante", requireAdmin, async (req, res) => {
     const { usuarioId, razon } = req.body
     if (!usuarioId) return res.status(400).json({ error: "usuarioId requerido" })
 
+    const solRows = await sql`
+      SELECT id FROM solicitudes
+      WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
+      ORDER BY creado_en DESC LIMIT 1
+    `
+
     // 1. Marcar solicitud rechazada
     await sql`
       UPDATE solicitudes
@@ -180,7 +200,12 @@ router.post("/rechazar-restaurante", requireAdmin, async (req, res) => {
       WHERE usuario_id = ${usuarioId} AND tipo = 'negocio'
     `
 
-    // 2. Enviar notificación push al usuario
+    // 2. BORRAR DOCUMENTOS SENSIBLES (INE / Selfie) de Supabase Storage por privacidad
+    if (solRows[0]?.id) {
+      await purgeSolicitudSensitiveDocs(solRows[0].id).catch(() => {})
+    }
+
+    // 3. Enviar notificación push al usuario
     await sendPushToUser(
       sql, usuarioId,
       "Solicitud de negocio rechazada",

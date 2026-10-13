@@ -22,6 +22,7 @@ import contingenciasRouter from "./routes/contingencias";
 import mensajesRouter      from "./routes/mensajes";
 import adminRouter         from "./routes/admin";
 import engagementRouter    from "./routes/engagement";
+import telegramRouter      from "./routes/telegram";
 import { initCronJobs } from "./cron";
 import { runMigrations } from "./migrations";
 import { createServer } from "http"
@@ -129,6 +130,7 @@ app.use("/api/notifications", notificationsRouter);
 app.use("/api/soporte",       soporteRouter);
 app.use("/api/admin",         adminRouter);
 app.use("/api/usuario",       engagementRouter);
+app.use("/api/telegram",      telegramRouter);
 
 // ── Sentry error handler (debe ir después de las rutas) ───────────────────
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);

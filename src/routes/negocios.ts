@@ -30,8 +30,9 @@ router.post('/solicitud', async (req, res) => {
       RETURNING *
     `;
 
-    // Notificación en segundo plano al Administrador
+    // Notificación en segundo plano al Administrador con botones interactivos
     notificarSolicitudRestaurante({
+      solicitud_id: rows[0].id,
       usuario_id: userId,
       nombre_negocio: datos?.nombre_negocio || datos?.nombre || 'Nuevo Restaurante',
       contacto_nombre: datos?.contacto || datos?.email || 'Sin contacto',

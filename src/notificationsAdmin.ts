@@ -8,22 +8,29 @@ export const ADMIN_TELEGRAM_USER = "ramses_batalla";
 /**
  * Envía un mensaje a Telegram del Administrador si las credenciales están configuradas.
  */
-export async function sendTelegramAdmin(texto: string, parseMode: "Markdown" | "HTML" = "Markdown"): Promise<boolean> {
+export async function sendTelegramAdmin(
+  texto: string,
+  parseMode: "Markdown" | "HTML" = "Markdown",
+  replyMarkup?: any
+): Promise<boolean> {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log("[Telegram Notifier - Log Local]:", texto);
     return false;
   }
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const body: any = {
+      chat_id: TELEGRAM_CHAT_ID,
+      text: texto,
+      parse_mode: parseMode,
+      disable_web_page_preview: false,
+    };
+    if (replyMarkup) body.reply_markup = replyMarkup;
+
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: texto,
-        parse_mode: parseMode,
-        disable_web_page_preview: false,
-      }),
+      body: JSON.stringify(body),
     });
     return res.ok;
   } catch (err: any) {
@@ -74,6 +81,7 @@ export async function notificarSolicitudRepartidor(datos: {
  * Notificación de Nueva Solicitud de Restaurante
  */
 export async function notificarSolicitudRestaurante(datos: {
+  solicitud_id?: string;
   usuario_id?: string;
   nombre_negocio: string;
   contacto_nombre: string;
@@ -89,6 +97,7 @@ export async function notificarSolicitudRestaurante(datos: {
 }) {
   const mensaje = `🍳 *¡Nueva Solicitud de Restaurante!*\n\n` +
     (datos.usuario_id ? `🆔 *ID Usuario:* \`${datos.usuario_id}\`\n` : "") +
+    (datos.solicitud_id ? `📋 *Solicitud ID:* \`${datos.solicitud_id}\`\n` : "") +
     `🏪 *Negocio:* ${datos.nombre_negocio}\n` +
     `👤 *Contacto:* ${datos.contacto_nombre}\n` +
     `📞 *Teléfono:* [${datos.telefono || "No especificado"}](https://wa.me/${(datos.telefono || "").replace(/\D/g, "")})\n` +
@@ -96,14 +105,28 @@ export async function notificarSolicitudRestaurante(datos: {
     (datos.categoria ? `🏷️ *Categoría:* ${datos.categoria}\n` : "") +
     (datos.direccion ? `📍 *Dirección:* ${datos.direccion}\n` : "") +
     (datos.rfc ? `📑 *RFC:* \`${datos.rfc}\`\n` : "") +
-    `\n📄 *Documentos:* \n` +
+    `\n📄 *Documentos (Temporales para Validación):* \n` +
     (datos.ine_frente ? `• [INE Frente](${datos.ine_frente})\n` : "") +
     (datos.ine_reverso ? `• [INE Reverso](${datos.ine_reverso})\n` : "") +
-    (datos.selfie ? `• [Selfie / Foto](${datos.selfie})\n` : "") +
+    (datos.selfie ? `• [Selfie / Rostro](${datos.selfie})\n` : "") +
     (datos.logo_url ? `• [Logo / Fachada](${datos.logo_url})\n` : "") +
-    `\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
+    `\n🔒 *Nota de Privacidad:* Al presionar Aprobar o Rechazar, los documentos sensibles (INE y Selfie) se eliminarán permanentemente de los servidores.` +
+    `\n\n💬 *Admin:* [@${ADMIN_TELEGRAM_USER}](https://t.me/${ADMIN_TELEGRAM_USER}) • [WhatsApp](https://wa.me/${ADMIN_PHONE_WHATSAPP})`;
 
-  await sendTelegramAdmin(mensaje);
+  const buttons: any[] = [];
+  if (datos.solicitud_id) {
+    buttons.push([
+      { text: "✅ Aprobar Restaurante", callback_data: `aprob_res:${datos.solicitud_id}` },
+      { text: "❌ Rechazar", callback_data: `rech_res:${datos.solicitud_id}` },
+    ]);
+  }
+  if (datos.telefono) {
+    buttons.push([
+      { text: "💬 Hablar por WhatsApp", url: `https://wa.me/52${datos.telefono.replace(/\D/g, "")}` }
+    ]);
+  }
+
+  await sendTelegramAdmin(mensaje, "Markdown", buttons.length > 0 ? { inline_keyboard: buttons } : undefined);
 }
 
 /**

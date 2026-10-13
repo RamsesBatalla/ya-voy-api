@@ -3,6 +3,7 @@ import { sql } from "./db"
 import { sendPushToUser } from "./firebase"
 import { notificarCliente } from "./websocket"
 import { logError } from "./logger"
+import { purgeSolicitudSensitiveDocs } from "./services/solicitudesService"
 
 async function deleteCloudinaryImage(url: string) {
   const CLOUDINARY_CLOUD = process.env.CLOUDINARY_CLOUD_NAME
@@ -83,6 +84,25 @@ export function initCronJobs() {
         WHERE pedido_id NOT IN (SELECT id FROM pedidos)
         RETURNING id`
       console.log("Cron: " + r9.length + " mensajes huerfanos eliminados")
+
+      // Purgar documentos sensibles de solicitudes pendientes mayores a 14 días o ya aprobadas/rechazadas que aún tengan documentos
+      try {
+        const docsOld = await sql`
+          SELECT id FROM solicitudes 
+          WHERE (status IN ('aprobado', 'rechazado') OR creado_en < NOW() - INTERVAL '14 days')
+          AND documentos->>'ine_frente' IS NOT NULL
+          AND documentos->>'ine_frente' NOT LIKE '%ELIMINADO%'
+          LIMIT 50
+        `
+        for (const row of docsOld) {
+          await purgeSolicitudSensitiveDocs(row.id).catch(() => {})
+        }
+        if (docsOld.length > 0) {
+          console.log(`Cron: ${docsOld.length} solicitudes con documentos sensibles purgados por privacidad`)
+        }
+      } catch (err: any) {
+        console.warn("Cron error purgando documentos sensibles:", err.message)
+      }
 
       await sql`ANALYZE pedidos, mensajes, device_tokens, retiros, reportes_soporte, bloqueos_historial, solicitudes`
       console.log("Cron: ANALYZE completado")
