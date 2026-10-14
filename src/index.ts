@@ -22,7 +22,7 @@ import contingenciasRouter from "./routes/contingencias";
 import mensajesRouter      from "./routes/mensajes";
 import adminRouter         from "./routes/admin";
 import engagementRouter    from "./routes/engagement";
-import telegramRouter      from "./routes/telegram";
+import telegramRouter, { startTelegramPolling } from "./routes/telegram";
 import { initCronJobs } from "./cron";
 import { runMigrations } from "./migrations";
 import { createServer } from "http"
@@ -149,5 +149,6 @@ server.listen(PORT, async () => {
   console.log(`YA VOY API en http://localhost:${PORT}`);
   await runMigrations().catch(e => console.error("Error migraciones:", e.message));
   initCronJobs();
+  startTelegramPolling();
 });
 export default app;
