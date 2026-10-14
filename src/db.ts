@@ -9,6 +9,7 @@ export const sql = postgres(process.env.DATABASE_URL, {
   max: 10,
   idle_timeout: 20,
   connect_timeout: 10,
+  prepare: false,
 });
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://qqwpfypjwdetljyzkogo.supabase.co';
