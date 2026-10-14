@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { sql } from "../db";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
 import admin from "firebase-admin";
@@ -16,8 +16,8 @@ router.post("/sync", requireAuth, async (req, res) => {
       VALUES (${userId}, ${email}, ${nombre}, ${fotoUrl}, ${rolSanitizado})
       ON CONFLICT (id) DO UPDATE SET
         email    = EXCLUDED.email,
-        nombre   = EXCLUDED.nombre,
-        foto_url = EXCLUDED.foto_url,
+        nombre   = COALESCE(NULLIF(usuarios.nombre, ''), EXCLUDED.nombre),
+        foto_url = COALESCE(NULLIF(usuarios.foto_url, ''), EXCLUDED.foto_url),
         rol      = EXCLUDED.rol
     `;
     const rows = await sql`SELECT * FROM usuarios WHERE id = ${userId}`;

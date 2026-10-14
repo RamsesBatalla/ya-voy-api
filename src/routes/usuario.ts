@@ -289,7 +289,11 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     let subtotalCalculado = 0
     for (const item of items) {
       const precioBase = precioMap[item.productoId] ?? Number(item.precioBase ?? item.precio ?? 0)
-      const extras = (item.opciones || []).reduce((s: number, o: any) => s + Number(o.precio || 0), 0)
+      let ops = item.opciones;
+      if (typeof ops === 'string') {
+        try { ops = JSON.parse(ops); } catch { ops = []; }
+      }
+      const extras = (Array.isArray(ops) ? ops : []).reduce((s: number, o: any) => s + Number(o.precio || 0), 0)
       subtotalCalculado += (precioBase + extras) * Number(item.cantidad || 1)
     }
     const totalCalculado = Math.round((subtotalCalculado + Number(envio) + Number(propina || 0) - Number(descuentoCupon || 0)) * 100) / 100
@@ -305,10 +309,13 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
     const palabrasRestaurante = genTres(codRest);
 
-    const negocioRows = await sql`SELECT esta_abierto, aceptando_pedidos, horarios FROM viveres WHERE id = ${negocioId}`
+    const negocioRows = await sql`SELECT esta_abierto, aceptando_pedidos, COALESCE(horarios, horario) as horarios FROM viveres WHERE id = ${negocioId}`
     if (!negocioRows.length || !negocioRows[0].esta_abierto) return res.status(400).json({ error: "Este restaurante está cerrado en este momento." })
     if (negocioRows[0].aceptando_pedidos === false) return res.status(400).json({ error: "Este restaurante pausó temporalmente los pedidos. Intenta en unos minutos." })
-    const horarios = negocioRows[0].horarios
+    let horarios = negocioRows[0].horarios
+    if (typeof horarios === 'string') {
+      try { horarios = JSON.parse(horarios) } catch {}
+    }
     if (horarios) {
       const DIAS_MAP = ['Dom','Lun','Mar','Mie','Jue','Vie','Sab']
       const now = new Date()
@@ -546,14 +553,15 @@ router.get("/direcciones/:userId", requireAuth, async (req, res) => {
 router.post("/direcciones", requireAuth, async (req, res) => {
   const authUserId = (req as any).userId
   try {
-    const { label, icono, direccion, lat, lng } = req.body
+    const { label, icono, direccion, lat, lng, principal } = req.body
     if (!label || !direccion) return res.status(400).json({ error: "label y direccion requeridos" })
     const existe = await sql`SELECT id FROM direcciones WHERE usuario_id = ${authUserId} LIMIT 1`
     const esPrimera = existe.length === 0
-    if (!esPrimera) await sql`UPDATE direcciones SET principal = false WHERE usuario_id = ${authUserId}`
+    const esPrincipal = principal !== undefined ? Boolean(principal) : esPrimera
+    if (esPrincipal) await sql`UPDATE direcciones SET principal = false WHERE usuario_id = ${authUserId}`
     const rows = await sql`
       INSERT INTO direcciones (usuario_id, label, icono, direccion, lat, lng, principal)
-      VALUES (${authUserId}, ${label}, ${icono || 'otro'}, ${direccion}, ${lat || null}, ${lng || null}, ${esPrimera})
+      VALUES (${authUserId}, ${label}, ${icono || 'otro'}, ${direccion}, ${lat || null}, ${lng || null}, ${esPrincipal})
       RETURNING *`
     res.json(rows[0])
   } catch (e: any) { res.status(500).json({ error: e.message }) }

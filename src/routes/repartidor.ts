@@ -90,7 +90,8 @@ router.get("/pedidos/disponibles", requireAuthRepartidor, async (_req, res) => {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre, v.direccion as negocio_direccion,
              v.lat as lat_restaurante, v.lng as lng_restaurante,
-             u.telefono as cliente_telefono
+             u.telefono as cliente_telefono,
+             u.nombre as cliente_nombre
       FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       LEFT JOIN usuarios u ON u.id = p.cliente_id
@@ -143,6 +144,7 @@ router.get("/:userId/pedidos", async (req, res) => {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre,
              u.telefono as cliente_telefono,
+             u.nombre as cliente_nombre,
              ROUND((p.total * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
       FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
