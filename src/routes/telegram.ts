@@ -14,6 +14,12 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8756989292:AAHqQXQ
 const ADMIN_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || "1269146838");
 
 const MOTIVOS_RESTAURANTE: Record<string, string> = {
+  ine: "La fotografía de tu identificación (INE) no es legible, tiene reflejos o está recortada. Por favor tómala con buena iluminación.",
+  sf: "La fotografía facial (selfie) no es clara o no coincide con los rasgos de la credencial oficial.",
+  ub: "La dirección o ubicación en mapa no pudo ser validada o se encuentra fuera de la zona de cobertura.",
+  dt: "La información básica de contacto o del negocio está incompleta o no pudimos comunicarnos.",
+  ot: "Tu solicitud no cumple con los requisitos vigentes para operar en la red Ya Voy.",
+  // Compatibilidad hacia atrás
   ine_borrosa: "La fotografía de tu identificación (INE) no es legible, tiene reflejos o está recortada. Por favor tómala con buena iluminación.",
   selfie_invalida: "La fotografía facial (selfie) no es clara o no coincide con los rasgos de la credencial oficial.",
   ubicacion_invalida: "La dirección o ubicación en mapa no pudo ser validada o se encuentra fuera de la zona de cobertura.",
@@ -22,6 +28,11 @@ const MOTIVOS_RESTAURANTE: Record<string, string> = {
 };
 
 const MOTIVOS_REPARTIDOR: Record<string, string> = {
+  ine: "La identificación (INE) o licencia de conducir no es legible o está vencida.",
+  sf: "La foto de rostro (selfie) no es nítida o no coincide con la credencial.",
+  vh: "Los datos del vehículo, placas o tarjeta de circulación presentan inconsistencias.",
+  ot: "Tu solicitud no cumple con los requisitos vigentes para repartidores en Ya Voy.",
+  // Compatibilidad hacia atrás
   ine_borrosa: "La identificación (INE) o licencia de conducir no es legible o está vencida.",
   selfie_invalida: "La foto de rostro (selfie) no es nítida o no coincide con la credencial.",
   vehiculo_invalido: "Los datos del vehículo, placas o tarjeta de circulación presentan inconsistencias.",
@@ -136,14 +147,15 @@ export async function handleTelegramUpdate(update: any) {
     const solicitudId = data.replace("rech_res:", "");
     await answerCallbackQuery(cq.id, "Selecciona el motivo del rechazo:");
 
+    // Códigos cortos (<10 chars) para no exceder los 64 bytes de callback_data en Telegram
     const keyboard = {
       inline_keyboard: [
-        [{ text: "📄 INE borrosa o no legible", callback_data: `motivo_res:${solicitudId}:ine_borrosa` }],
-        [{ text: "👤 Selfie no coincide con INE", callback_data: `motivo_res:${solicitudId}:selfie_invalida` }],
-        [{ text: "📍 Dirección/ubicación no válida", callback_data: `motivo_res:${solicitudId}:ubicacion_invalida` }],
-        [{ text: "📝 Datos de negocio incompletos", callback_data: `motivo_res:${solicitudId}:datos_incompletos` }],
-        [{ text: "❌ No cumple requisitos (Otro)", callback_data: `motivo_res:${solicitudId}:otro` }],
-        [{ text: "🔙 Cancelar y Volver", callback_data: `volver_res:${solicitudId}` }],
+        [{ text: "📄 INE borrosa o no legible", callback_data: `m_res:${solicitudId}:ine` }],
+        [{ text: "👤 Selfie no coincide con INE", callback_data: `m_res:${solicitudId}:sf` }],
+        [{ text: "📍 Dirección/ubicación no válida", callback_data: `m_res:${solicitudId}:ub` }],
+        [{ text: "📝 Datos de negocio incompletos", callback_data: `m_res:${solicitudId}:dt` }],
+        [{ text: "❌ No cumple requisitos (Otro)", callback_data: `m_res:${solicitudId}:ot` }],
+        [{ text: "🔙 Cancelar y Volver", callback_data: `v_res:${solicitudId}` }],
       ]
     };
 
@@ -152,7 +164,7 @@ export async function handleTelegramUpdate(update: any) {
   }
 
   // 3. EJECUTAR RECHAZO CON MOTIVO SELECCIONADO (RESTAURANTE)
-  if (data.startsWith("motivo_res:")) {
+  if (data.startsWith("m_res:") || data.startsWith("motivo_res:")) {
     const [, solicitudId, motivoKey] = data.split(":");
     const razon = MOTIVOS_RESTAURANTE[motivoKey] || "Tu solicitud no fue aprobada en este momento. Revisa la información y vuelve a intentar.";
 
@@ -179,8 +191,8 @@ export async function handleTelegramUpdate(update: any) {
   }
 
   // 4. RESTABLECER BOTONES ORIGINALES (RESTAURANTE)
-  if (data.startsWith("volver_res:")) {
-    const solicitudId = data.replace("volver_res:", "");
+  if (data.startsWith("v_res:") || data.startsWith("volver_res:")) {
+    const solicitudId = data.startsWith("v_res:") ? data.replace("v_res:", "") : data.replace("volver_res:", "");
     await answerCallbackQuery(cq.id, "Opciones restablecidas");
 
     const rows = await sql`SELECT datos FROM solicitudes WHERE id = ${solicitudId}`;
@@ -230,13 +242,14 @@ export async function handleTelegramUpdate(update: any) {
     const solicitudId = data.replace("rech_rep:", "");
     await answerCallbackQuery(cq.id, "Selecciona el motivo del rechazo:");
 
+    // Códigos cortos (<10 chars) para no exceder los 64 bytes de callback_data en Telegram
     const keyboard = {
       inline_keyboard: [
-        [{ text: "📄 INE o Licencia no legible", callback_data: `motivo_rep:${solicitudId}:ine_borrosa` }],
-        [{ text: "👤 Selfie no coincide con INE", callback_data: `motivo_rep:${solicitudId}:selfie_invalida` }],
-        [{ text: "🏍️ Datos de vehículo inconsistentes", callback_data: `motivo_rep:${solicitudId}:vehiculo_invalido` }],
-        [{ text: "❌ No cumple requisitos (Otro)", callback_data: `motivo_rep:${solicitudId}:otro` }],
-        [{ text: "🔙 Cancelar y Volver", callback_data: `volver_rep:${solicitudId}` }],
+        [{ text: "📄 INE o Licencia no legible", callback_data: `m_rep:${solicitudId}:ine` }],
+        [{ text: "👤 Selfie no coincide con INE", callback_data: `m_rep:${solicitudId}:sf` }],
+        [{ text: "🏍️ Datos de vehículo inconsistentes", callback_data: `m_rep:${solicitudId}:vh` }],
+        [{ text: "❌ No cumple requisitos (Otro)", callback_data: `m_rep:${solicitudId}:ot` }],
+        [{ text: "🔙 Cancelar y Volver", callback_data: `v_rep:${solicitudId}` }],
       ]
     };
 
@@ -245,7 +258,7 @@ export async function handleTelegramUpdate(update: any) {
   }
 
   // 7. EJECUTAR RECHAZO CON MOTIVO SELECCIONADO (REPARTIDOR)
-  if (data.startsWith("motivo_rep:")) {
+  if (data.startsWith("m_rep:") || data.startsWith("motivo_rep:")) {
     const [, solicitudId, motivoKey] = data.split(":");
     const razon = MOTIVOS_REPARTIDOR[motivoKey] || "Tu solicitud de repartidor no fue aprobada.";
 
@@ -272,8 +285,8 @@ export async function handleTelegramUpdate(update: any) {
   }
 
   // 8. RESTABLECER BOTONES ORIGINALES (REPARTIDOR)
-  if (data.startsWith("volver_rep:")) {
-    const solicitudId = data.replace("volver_rep:", "");
+  if (data.startsWith("v_rep:") || data.startsWith("volver_rep:")) {
+    const solicitudId = data.startsWith("v_rep:") ? data.replace("v_rep:", "") : data.replace("volver_rep:", "");
     await answerCallbackQuery(cq.id, "Opciones restablecidas");
 
     const rows = await sql`SELECT datos FROM solicitudes WHERE id = ${solicitudId}`;
