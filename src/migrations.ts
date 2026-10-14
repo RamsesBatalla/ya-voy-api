@@ -38,6 +38,18 @@ export async function runMigrations() {
     creado_en TIMESTAMPTZ DEFAULT NOW()
   )`
   await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS owner_id TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS categoria TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS logo_url TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS banner_url TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS latitud NUMERIC`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS longitud NUMERIC`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS telefono TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS tipo TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS imagen_url TEXT`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS aceptando_pedidos BOOLEAN DEFAULT true`
+  await sql`ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_rol_check`
   await sql`CREATE INDEX IF NOT EXISTS idx_viveres_owner_id ON viveres(owner_id)`
 
   // ── 2.1 Solicitudes de Afiliación (Restaurantes y Repartidores) ────────────

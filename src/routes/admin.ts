@@ -130,11 +130,11 @@ router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
     if (!negocioId) {
       const inserted = await sql`
         INSERT INTO viveres (
-          owner_id, nombre, categoria, direccion, latitud, longitud,
-          telefono, logo_url, esta_abierto, status
+          owner_id, nombre, categoria, tipo, direccion, latitud, lat, longitud, lng,
+          telefono, logo_url, imagen_url, esta_abierto, status, aceptando_pedidos
         ) VALUES (
-          ${usuarioId}, ${nombre}, ${categoria}, ${direccion}, ${lat}, ${lng},
-          ${telefono}, ${logoUrl}, true, 'aprobado'
+          ${usuarioId}, ${nombre}, ${categoria}, ${categoria}, ${direccion}, ${lat}, ${lat}, ${lng}, ${lng},
+          ${telefono}, ${logoUrl}, ${logoUrl}, true, 'aprobado', true
         ) RETURNING id
       `
       negocioId = inserted[0]?.id
@@ -143,13 +143,18 @@ router.post("/aprobar-restaurante", requireAdmin, async (req, res) => {
         UPDATE viveres SET
           nombre = ${nombre},
           categoria = ${categoria},
+          tipo = ${categoria},
           direccion = COALESCE(NULLIF(${direccion}, ''), direccion),
           latitud = COALESCE(${lat}, latitud),
+          lat = COALESCE(${lat}, lat),
           longitud = COALESCE(${lng}, longitud),
+          lng = COALESCE(${lng}, lng),
           telefono = COALESCE(NULLIF(${telefono}, ''), telefono),
           logo_url = COALESCE(${logoUrl}, logo_url),
+          imagen_url = COALESCE(${logoUrl}, imagen_url),
           status = 'aprobado',
-          esta_abierto = true
+          esta_abierto = true,
+          aceptando_pedidos = true
         WHERE id = ${negocioId}
       `
     }
