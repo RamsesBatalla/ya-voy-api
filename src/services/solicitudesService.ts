@@ -58,16 +58,17 @@ export async function purgeSolicitudSensitiveDocs(solicitudId: string): Promise<
 
     // Conservar solo logo/foto de fachada si existe; marcar los datos sensibles como eliminados
     const logoConservado = docs.logo || docs.fachada || null;
+    const updatedDocs = {
+      ...(logoConservado ? { logo: logoConservado } : {}),
+      ine_frente: '[ELIMINADO_POR_PRIVACIDAD]',
+      ine_reverso: '[ELIMINADO_POR_PRIVACIDAD]',
+      selfie: '[ELIMINADO_POR_PRIVACIDAD]',
+      eliminado_en: new Date().toISOString(),
+    };
 
     await sql`
       UPDATE solicitudes
-      SET documentos = jsonb_build_object(
-        'logo', ${logoConservado},
-        'ine_frente', '[ELIMINADO_POR_PRIVACIDAD]',
-        'ine_reverso', '[ELIMINADO_POR_PRIVACIDAD]',
-        'selfie', '[ELIMINADO_POR_PRIVACIDAD]',
-        'eliminado_en', NOW()
-      )
+      SET documentos = ${JSON.stringify(updatedDocs)}
       WHERE id = ${solicitudId}
     `;
     console.log(`[Privacy] Documentos sensibles eliminados permanentemente para solicitud ${solicitudId}`);
