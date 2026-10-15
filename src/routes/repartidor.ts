@@ -247,4 +247,37 @@ router.get("/disponibles/count", async (_req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+// GET /api/repartidor/:repartidorId/calificaciones-aspectos — desglose de aspectos del repartidor
+router.get("/:repartidorId/calificaciones-aspectos", async (req, res) => {
+  try {
+    const [rep] = await sql`SELECT rating FROM repartidores WHERE id = ${req.params.repartidorId} OR usuario_id = ${req.params.repartidorId} LIMIT 1`;
+    const pedidosRows = await sql`
+      SELECT rating_repartidor, aspectos_repartidor 
+      FROM pedidos 
+      WHERE repartidor_id = ${req.params.repartidorId} AND rating_repartidor IS NOT NULL
+      ORDER BY creado_en DESC LIMIT 100
+    `;
+    const ratingPromedio = rep?.rating ? Number(Number(rep.rating).toFixed(1)) : 5.0;
+    const aspectosConteo: Record<string, number> = {
+      "Rapidez": 0,
+      "Amabilidad": 0,
+      "Cuidado del pedido": 0,
+      "Buena comunicación": 0
+    };
+    let totalRatings = pedidosRows.length;
+    for (const p of pedidosRows) {
+      const asp = Array.isArray(p.aspectos_repartidor) ? p.aspectos_repartidor : (typeof p.aspectos_repartidor === 'string' ? JSON.parse(p.aspectos_repartidor) : []);
+      for (const a of asp) {
+        if (aspectosConteo[a] !== undefined) aspectosConteo[a]++;
+        else aspectosConteo[a] = 1;
+      }
+    }
+    res.json({
+      rating: ratingPromedio,
+      total: totalRatings,
+      aspectos: aspectosConteo
+    });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 export default router

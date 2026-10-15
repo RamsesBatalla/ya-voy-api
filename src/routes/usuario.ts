@@ -469,30 +469,101 @@ router.patch("/pedidos/:id/cancelar", requireAuthUsuario, async (req, res) => {
 
 
 router.patch("/pedidos/:id/rating", requireAuthUsuario, async (req, res) => {
-
   try {
+    const { rating_restaurante, rating_repartidor, aspectos_restaurante, aspectos_repartidor } = req.body;
 
-    const { rating_restaurante, rating_repartidor, comentario_rating } = req.body;
+    const validarRating = (r: any) => r == null || (Number.isInteger(Number(r)) && Number(r) >= 1 && Number(r) <= 5);
+    if (!validarRating(rating_restaurante)) return res.status(400).json({ error: "rating_restaurante debe ser entre 1 y 5" });
+    if (!validarRating(rating_repartidor)) return res.status(400).json({ error: "rating_repartidor debe ser entre 1 y 5" });
 
-    const validarRating = (r: any) => r == null || (Number.isInteger(Number(r)) && Number(r) >= 1 && Number(r) <= 5)
-    if (!validarRating(rating_restaurante)) return res.status(400).json({ error: "rating_restaurante debe ser entre 1 y 5" })
-    if (!validarRating(rating_repartidor)) return res.status(400).json({ error: "rating_repartidor debe ser entre 1 y 5" })
+    const aspRestJson = JSON.stringify(Array.isArray(aspectos_restaurante) ? aspectos_restaurante : []);
+    const aspRepJson = JSON.stringify(Array.isArray(aspectos_repartidor) ? aspectos_repartidor : []);
 
-    await sql`UPDATE pedidos SET rating_restaurante = ${rating_restaurante ?? null}, rating_repartidor = ${rating_repartidor ?? null}, comentario_rating = ${comentario_rating || ''} WHERE id = ${req.params.id}`;
+    await sql`
+      UPDATE pedidos SET 
+        rating_restaurante = ${rating_restaurante ?? null}, 
+        rating_repartidor = ${rating_repartidor ?? null}, 
+        aspectos_restaurante = ${aspRestJson}::jsonb,
+        aspectos_repartidor = ${aspRepJson}::jsonb
+      WHERE id = ${req.params.id}
+    `;
 
     if (rating_restaurante) {
-
-      await sql`UPDATE viveres SET rating = (SELECT AVG(rating_restaurante) FROM pedidos WHERE negocio_id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id}) AND rating_restaurante IS NOT NULL) WHERE id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id})`;
-
+      await sql`
+        UPDATE viveres 
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_restaurante), 5.0) FROM pedidos WHERE negocio_id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id}) AND rating_restaurante IS NOT NULL), 1) 
+        WHERE id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id})
+      `;
     }
 
     if (rating_repartidor) {
-      await sql`UPDATE repartidores SET rating = (SELECT AVG(rating_repartidor) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND rating_repartidor IS NOT NULL), entregas_count = (SELECT COUNT(*) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND status = 'entregado') WHERE id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id})`
+      await sql`
+        UPDATE repartidores 
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_repartidor), 5.0) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND rating_repartidor IS NOT NULL), 1),
+            entregas_count = (SELECT COUNT(*) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND status = 'entregado') 
+        WHERE id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id})
+      `;
     }
     res.json({ ok: true });
-
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
+// PATCH /api/usuario/pedidos/:id/rating-cliente — el repartidor califica al cliente
+router.patch("/pedidos/:id/rating-cliente", async (req, res) => {
+  try {
+    const { rating_cliente, aspectos_cliente } = req.body;
+    const validarRating = (r: any) => r == null || (Number.isInteger(Number(r)) && Number(r) >= 1 && Number(r) <= 5);
+    if (!validarRating(rating_cliente)) return res.status(400).json({ error: "rating_cliente debe ser entre 1 y 5" });
+
+    const aspCliJson = JSON.stringify(Array.isArray(aspectos_cliente) ? aspectos_cliente : []);
+    await sql`
+      UPDATE pedidos SET 
+        rating_cliente = ${rating_cliente ?? null}, 
+        aspectos_cliente = ${aspCliJson}::jsonb 
+      WHERE id = ${req.params.id}
+    `;
+
+    if (rating_cliente) {
+      await sql`
+        UPDATE usuarios 
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_cliente), 5.0) FROM pedidos WHERE cliente_id = (SELECT cliente_id FROM pedidos WHERE id = ${req.params.id}) AND rating_cliente IS NOT NULL), 1)
+        WHERE id = (SELECT cliente_id FROM pedidos WHERE id = ${req.params.id})
+      `;
+    }
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/usuario/perfil/:userId/calificaciones-aspectos — desglose de aspectos del cliente
+router.get("/perfil/:userId/calificaciones-aspectos", async (req, res) => {
+  try {
+    const [usr] = await sql`SELECT rating FROM usuarios WHERE id = ${req.params.userId}`;
+    const pedidosRows = await sql`
+      SELECT rating_cliente, aspectos_cliente 
+      FROM pedidos 
+      WHERE cliente_id = ${req.params.userId} AND rating_cliente IS NOT NULL
+      ORDER BY creado_en DESC LIMIT 100
+    `;
+    const ratingPromedio = usr?.rating ? Number(Number(usr.rating).toFixed(1)) : 5.0;
+    const aspectosConteo: Record<string, number> = {
+      "Puntualidad al recibir": 0,
+      "Instrucciones claras": 0,
+      "Amabilidad y respeto": 0,
+    };
+    let totalRatings = pedidosRows.length;
+    for (const p of pedidosRows) {
+      const asp = Array.isArray(p.aspectos_cliente) ? p.aspectos_cliente : (typeof p.aspectos_cliente === 'string' ? JSON.parse(p.aspectos_cliente) : []);
+      for (const a of asp) {
+        if (aspectosConteo[a] !== undefined) aspectosConteo[a]++;
+        else aspectosConteo[a] = 1;
+      }
+    }
+    res.json({
+      rating: ratingPromedio,
+      total: totalRatings,
+      aspectos: aspectosConteo
+    });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 

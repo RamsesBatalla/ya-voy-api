@@ -42,7 +42,8 @@ export async function purgeSolicitudSensitiveDocs(solicitudId: string): Promise<
   try {
     const rows = await sql`SELECT documentos, datos FROM solicitudes WHERE id = ${solicitudId} LIMIT 1`;
     if (!rows || rows.length === 0) return;
-    const docs = rows[0].documentos || {};
+    const rawDocs = rows[0].documentos;
+    const docs = typeof rawDocs === 'string' ? JSON.parse(rawDocs) : (rawDocs || {});
 
     const sensitiveUrls = [
       docs.ine_frente,
@@ -89,11 +90,12 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
 
     const sol = solRows[0];
     const usuarioId = sol.usuario_id;
-    const datos = sol.datos || {};
-    const documentos = sol.documentos || {};
+    const datos = typeof sol.datos === 'string' ? JSON.parse(sol.datos) : (sol.datos || {});
+    const documentos = typeof sol.documentos === 'string' ? JSON.parse(sol.documentos) : (sol.documentos || {});
 
     const nombre = datos.nombre_negocio || datos.nombre || "Mi Restaurante";
     const categoria = datos.tipo_negocio || datos.categoria || "Restaurante";
+    const tipo = (datos.tipo_negocio || datos.categoria || 'restaurante').toLowerCase().includes('tienda') ? 'tienda' : 'restaurante';
     const direccion = datos.direccion || "";
     const lat = datos.lat != null ? Number(datos.lat) : null;
     const lng = datos.lng != null ? Number(datos.lng) : null;
@@ -110,7 +112,7 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
           owner_id, nombre, categoria, tipo, direccion, latitud, lat, longitud, lng,
           telefono, logo_url, imagen_url, esta_abierto, status, aceptando_pedidos
         ) VALUES (
-          ${usuarioId}, ${nombre}, ${categoria}, ${categoria}, ${direccion}, ${lat}, ${lat}, ${lng}, ${lng},
+          ${usuarioId}, ${nombre}, ${categoria}, ${tipo}, ${direccion}, ${lat}, ${lat}, ${lng}, ${lng},
           ${telefono}, ${logoUrl}, ${logoUrl}, true, 'aprobado', true
         ) RETURNING id
       `;
@@ -120,7 +122,7 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
         UPDATE viveres SET
           nombre = ${nombre},
           categoria = ${categoria},
-          tipo = ${categoria},
+          tipo = ${tipo},
           direccion = COALESCE(NULLIF(${direccion}, ''), direccion),
           latitud = COALESCE(${lat}, latitud),
           lat = COALESCE(${lat}, lat),
@@ -176,7 +178,8 @@ export async function rechazarRestaurante(solicitudId: string, razon?: string): 
 
     const sol = solRows[0];
     const usuarioId = sol.usuario_id;
-    const nombre = sol.datos?.nombre_negocio || "Restaurante";
+    const datos = typeof sol.datos === 'string' ? JSON.parse(sol.datos) : (sol.datos || {});
+    const nombre = datos.nombre_negocio || datos.nombre || "Restaurante";
 
     // 1. Marcar solicitud como rechazada
     await sql`
@@ -215,8 +218,8 @@ export async function aprobarRepartidor(solicitudId: string): Promise<{ ok: bool
 
     const sol = solRows[0];
     const usuarioId = sol.usuario_id;
-    const datos = sol.datos || {};
-    const nombre = datos.nombre || "Repartidor";
+    const datos = typeof sol.datos === 'string' ? JSON.parse(sol.datos) : (sol.datos || {});
+    const nombre = datos.nombre || [datos.nombres, datos.primer_apellido, datos.segundo_apellido].filter(Boolean).join(" ") || "Repartidor";
 
     // 1. Crear o activar registro de repartidor
     await sql`
@@ -265,7 +268,8 @@ export async function rechazarRepartidor(solicitudId: string, razon?: string): P
 
     const sol = solRows[0];
     const usuarioId = sol.usuario_id;
-    const nombre = sol.datos?.nombre || "Repartidor";
+    const datos = typeof sol.datos === 'string' ? JSON.parse(sol.datos) : (sol.datos || {});
+    const nombre = datos.nombre || [datos.nombres, datos.primer_apellido, datos.segundo_apellido].filter(Boolean).join(" ") || "Repartidor";
 
     // 1. Marcar solicitud como rechazada
     await sql`

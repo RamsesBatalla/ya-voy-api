@@ -153,6 +153,15 @@ export async function runMigrations() {
   await sql`ALTER TABLE productos ADD COLUMN IF NOT EXISTS agotado BOOLEAN DEFAULT false`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'domicilio'`
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS programado_para TEXT`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_restaurante NUMERIC`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_repartidor NUMERIC`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_cliente NUMERIC`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_restaurante JSONB DEFAULT '[]'::jsonb`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_repartidor JSONB DEFAULT '[]'::jsonb`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_cliente JSONB DEFAULT '[]'::jsonb`
+  await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 5.0`
+  await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 5.0`
+  await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 5.0`
 
   // ── Wallet ────────────────────────────────────────────────────────────────
   await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0`

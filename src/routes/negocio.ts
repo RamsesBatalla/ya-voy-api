@@ -33,16 +33,54 @@ router.patch("/:id/pausar", requireAuth, async (req, res) => {
 
 router.patch("/:id/perfil",  requireAuth, async (req, res) => {
   try {
-    const { nombre, direccion, telefono, descripcion } = req.body;
+    const { nombre, direccion, telefono, descripcion, tipo, categoria } = req.body;
+    const cleanTipo = tipo ? (tipo.toLowerCase().includes('tienda') ? 'tienda' : 'restaurante') : null;
     const rows = await sql`
       UPDATE viveres SET
         nombre      = COALESCE(${nombre},      nombre),
         direccion   = COALESCE(${direccion},   direccion),
         telefono    = COALESCE(${telefono},    telefono),
-        descripcion = COALESCE(${descripcion}, descripcion)
+        descripcion = COALESCE(${descripcion}, descripcion),
+        tipo        = COALESCE(${cleanTipo},   tipo),
+        categoria   = COALESCE(${categoria},   categoria)
       WHERE id = ${req.params.id} RETURNING *
     `;
+    invalidateCache("negocios:all");
     res.json(rows[0]);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/:id/calificaciones-aspectos", async (req, res) => {
+  try {
+    const [neg] = await sql`SELECT id, rating FROM viveres WHERE id = ${req.params.id} OR owner_id = ${req.params.id} LIMIT 1`;
+    const targetNegId = neg?.id || req.params.id;
+    const pedidosRows = await sql`
+      SELECT rating_restaurante, aspectos_restaurante 
+      FROM pedidos 
+      WHERE negocio_id = ${targetNegId} AND rating_restaurante IS NOT NULL
+      ORDER BY creado_en DESC LIMIT 100
+    `;
+    const ratingPromedio = neg?.rating ? Number(Number(neg.rating).toFixed(1)) : 5.0;
+    const aspectosConteo: Record<string, number> = {
+      "Sabor": 0,
+      "Empaque": 0,
+      "Puntualidad": 0,
+      "Presentación": 0,
+      "Temperatura": 0
+    };
+    let totalRatings = pedidosRows.length;
+    for (const p of pedidosRows) {
+      const asp = Array.isArray(p.aspectos_restaurante) ? p.aspectos_restaurante : (typeof p.aspectos_restaurante === 'string' ? JSON.parse(p.aspectos_restaurante) : []);
+      for (const a of asp) {
+        if (aspectosConteo[a] !== undefined) aspectosConteo[a]++;
+        else aspectosConteo[a] = 1;
+      }
+    }
+    res.json({
+      rating: ratingPromedio,
+      total: totalRatings,
+      aspectos: aspectosConteo
+    });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
