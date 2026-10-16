@@ -78,42 +78,27 @@ router.get("/productos/feed", async (_req, res) => {
     const rows = await sql`
 
       SELECT p.*, v.nombre as negocio_nombre, v.id as negocio_id,
-
-             v.imagen_url as negocio_imagen, v.rating as negocio_rating
-
+             v.imagen_url as negocio_imagen, COALESCE(v.rating, 0.0) as negocio_rating,
+             v.esta_abierto as negocio_abierto
       FROM productos p
-
       JOIN viveres v ON v.id::text = p.negocio_id
-
-      WHERE p.disponible = true AND v.status = 'aprobado' AND v.esta_abierto = true
-
-      ORDER BY p.destacado DESC, v.rating DESC NULLS LAST, p.nombre
-
+      WHERE p.disponible = true AND v.status = 'aprobado'
+      ORDER BY v.esta_abierto DESC, p.destacado DESC, v.rating DESC NULLS LAST, p.nombre
       LIMIT 80
-
     `;
-
     res.json(rows);
-
   } catch (e: any) { res.status(500).json({ error: e.message }); }
-
 });
 
-
-
 router.get("/negocios", async (req, res) => {
-
   try {
-
     const q = ((req.query.q as string) || "").trim()
-
     if (q.length >= 2) {
       const rows = await sql`
         SELECT * FROM viveres
         WHERE status = 'aprobado'
-          AND esta_abierto = true
           AND (nombre % ${q} OR nombre ILIKE ${'%' + q + '%'})
-        ORDER BY similarity(nombre, ${q}) DESC, rating DESC
+        ORDER BY esta_abierto DESC, similarity(nombre, ${q}) DESC, rating DESC NULLS LAST
         LIMIT 50`
       return res.json(rows)
     }
@@ -121,8 +106,8 @@ router.get("/negocios", async (req, res) => {
     const cached = getCache<any[]>("negocios:all")
     if (cached) return res.json(cached)
 
-    const rows = await sql`SELECT * FROM viveres WHERE status = 'aprobado' AND esta_abierto = true ORDER BY aceptando_pedidos DESC NULLS LAST, rating DESC`
-    setCache("negocios:all", rows)
+    const rows = await sql`SELECT * FROM viveres WHERE status = 'aprobado' ORDER BY esta_abierto DESC, aceptando_pedidos DESC NULLS LAST, rating DESC NULLS LAST`
+    setCache("negocios:all", rows, 30 * 1000)
     res.json(rows);
 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -491,7 +476,7 @@ router.patch("/pedidos/:id/rating", requireAuthUsuario, async (req, res) => {
     if (rating_restaurante) {
       await sql`
         UPDATE viveres 
-        SET rating = ROUND((SELECT COALESCE(AVG(rating_restaurante), 5.0) FROM pedidos WHERE negocio_id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id}) AND rating_restaurante IS NOT NULL), 1) 
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_restaurante), 0.0) FROM pedidos WHERE negocio_id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id}) AND rating_restaurante IS NOT NULL), 1) 
         WHERE id = (SELECT negocio_id FROM pedidos WHERE id = ${req.params.id})
       `;
     }
@@ -499,7 +484,7 @@ router.patch("/pedidos/:id/rating", requireAuthUsuario, async (req, res) => {
     if (rating_repartidor) {
       await sql`
         UPDATE repartidores 
-        SET rating = ROUND((SELECT COALESCE(AVG(rating_repartidor), 5.0) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND rating_repartidor IS NOT NULL), 1),
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_repartidor), 0.0) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND rating_repartidor IS NOT NULL), 1),
             entregas_count = (SELECT COUNT(*) FROM pedidos WHERE repartidor_id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id}) AND status = 'entregado') 
         WHERE id = (SELECT repartidor_id FROM pedidos WHERE id = ${req.params.id})
       `;
@@ -526,7 +511,7 @@ router.patch("/pedidos/:id/rating-cliente", async (req, res) => {
     if (rating_cliente) {
       await sql`
         UPDATE usuarios 
-        SET rating = ROUND((SELECT COALESCE(AVG(rating_cliente), 5.0) FROM pedidos WHERE cliente_id = (SELECT cliente_id FROM pedidos WHERE id = ${req.params.id}) AND rating_cliente IS NOT NULL), 1)
+        SET rating = ROUND((SELECT COALESCE(AVG(rating_cliente), 0.0) FROM pedidos WHERE cliente_id = (SELECT cliente_id FROM pedidos WHERE id = ${req.params.id}) AND rating_cliente IS NOT NULL), 1)
         WHERE id = (SELECT cliente_id FROM pedidos WHERE id = ${req.params.id})
       `;
     }
@@ -544,7 +529,7 @@ router.get("/perfil/:userId/calificaciones-aspectos", async (req, res) => {
       WHERE cliente_id = ${req.params.userId} AND rating_cliente IS NOT NULL
       ORDER BY creado_en DESC LIMIT 100
     `;
-    const ratingPromedio = usr?.rating ? Number(Number(usr.rating).toFixed(1)) : 5.0;
+    const ratingPromedio = usr?.rating ? Number(Number(usr.rating).toFixed(1)) : 0.0;
     const aspectosConteo: Record<string, number> = {
       "Puntualidad al recibir": 0,
       "Instrucciones claras": 0,
@@ -584,11 +569,12 @@ router.patch("/perfil/:userId", requireAuthUsuario, async (req, res) => {
     await sql`
       UPDATE usuarios SET 
         nombre = COALESCE(NULLIF(${nombre}, ''), nombre),
-        telefono = COALESCE(NULLIF(${telefono}, ''), telefono),
+        telefono = ${telefono !== undefined ? telefono : null},
         foto_perfil = COALESCE(${foto_perfil}, foto_perfil)
       WHERE id = ${req.params.userId}
     `
-    res.json({ ok: true })
+    const [updated] = await sql`SELECT id, nombre, email, telefono, foto_perfil, foto_url FROM usuarios WHERE id = ${req.params.userId}`
+    res.json({ ok: true, usuario: updated })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 

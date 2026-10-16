@@ -60,7 +60,7 @@ router.get("/:id/calificaciones-aspectos", async (req, res) => {
       WHERE negocio_id = ${targetNegId} AND rating_restaurante IS NOT NULL
       ORDER BY creado_en DESC LIMIT 100
     `;
-    const ratingPromedio = neg?.rating ? Number(Number(neg.rating).toFixed(1)) : 5.0;
+    const ratingPromedio = neg?.rating ? Number(Number(neg.rating).toFixed(1)) : 0.0;
     const aspectosConteo: Record<string, number> = {
       "Sabor": 0,
       "Empaque": 0,

@@ -16,7 +16,10 @@ router.post("/sync", requireAuth, async (req, res) => {
       VALUES (${userId}, ${email}, ${nombre}, ${fotoUrl}, ${rolSanitizado})
       ON CONFLICT (id) DO UPDATE SET
         email    = EXCLUDED.email,
-        nombre   = COALESCE(NULLIF(usuarios.nombre, ''), EXCLUDED.nombre),
+        nombre   = CASE 
+                     WHEN EXCLUDED.nombre IS NOT NULL AND TRIM(EXCLUDED.nombre) != '' THEN EXCLUDED.nombre 
+                     ELSE usuarios.nombre 
+                   END,
         foto_url = COALESCE(NULLIF(usuarios.foto_url, ''), EXCLUDED.foto_url),
         rol      = EXCLUDED.rol
     `;

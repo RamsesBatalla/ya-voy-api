@@ -257,7 +257,7 @@ router.get("/:repartidorId/calificaciones-aspectos", async (req, res) => {
       WHERE repartidor_id = ${req.params.repartidorId} AND rating_repartidor IS NOT NULL
       ORDER BY creado_en DESC LIMIT 100
     `;
-    const ratingPromedio = rep?.rating ? Number(Number(rep.rating).toFixed(1)) : 5.0;
+    const ratingPromedio = rep?.rating ? Number(Number(rep.rating).toFixed(1)) : 0.0;
     const aspectosConteo: Record<string, number> = {
       "Rapidez": 0,
       "Amabilidad": 0,
