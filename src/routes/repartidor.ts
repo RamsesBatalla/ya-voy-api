@@ -84,21 +84,72 @@ router.patch("/:userId/status", requireAuthRepartidor, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // GET /api/repartidor/pedidos/disponibles
-router.get("/pedidos/disponibles", requireAuthRepartidor, async (_req, res) => {
+router.get("/pedidos/disponibles", requireAuthRepartidor, async (req, res) => {
+  const authRepId = (req as any).repUserId;
+  const rLat = req.query.lat != null && req.query.lat !== "" ? Number(req.query.lat) : null;
+  const rLng = req.query.lng != null && req.query.lng !== "" ? Number(req.query.lng) : null;
+
   try {
     const rows = await sql`
       SELECT p.*, v.nombre as negocio_nombre, v.direccion as negocio_direccion,
-             v.lat as lat_restaurante, v.lng as lng_restaurante,
+             COALESCE(v.lat, v.latitud) as lat_restaurante,
+             COALESCE(v.lng, v.longitud) as lng_restaurante,
              u.telefono as cliente_telefono,
              u.nombre as cliente_nombre
       FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       LEFT JOIN usuarios u ON u.id = p.cliente_id
-      WHERE p.status = 'listo' AND (p.repartidor_id IS NULL OR p.repartidor_id = '')
+      WHERE (p.status = 'listo' OR p.status = 'nuevo' OR p.status = 'preparando')
+        AND (p.repartidor_id IS NULL OR p.repartidor_id = '')
+        AND p.id::text NOT IN (
+          SELECT pedido_id FROM pedidos_rechazados WHERE repartidor_id = ${authRepId}
+        )
       ORDER BY p.creado_en DESC
+      LIMIT 50
     `;
-    res.json(rows);
+
+    const procesados = rows.map((p: any) => {
+      let distRepRestKm: number | null = null;
+      let distRestCliKm: number | null = null;
+
+      if (rLat != null && rLng != null && p.lat_restaurante != null && p.lng_restaurante != null) {
+        distRepRestKm = Math.round(calcHaversineKm(rLat, rLng, Number(p.lat_restaurante), Number(p.lng_restaurante)) * 10) / 10;
+      }
+      if (p.lat_restaurante != null && p.lng_restaurante != null && p.lat_entrega != null && p.lng_entrega != null) {
+        distRestCliKm = Math.round(calcHaversineKm(Number(p.lat_restaurante), Number(p.lng_restaurante), Number(p.lat_entrega), Number(p.lng_entrega)) * 10) / 10;
+      }
+
+      return {
+        ...p,
+        distancia_al_restaurante_km: distRepRestKm,
+        distancia_entrega_km: distRestCliKm,
+        costo_envio: p.costo_envio ?? 25,
+      };
+    });
+
+    res.json(procesados);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/repartidor/pedidos/:id/rechazar - conductor rechaza un pedido detectado
+router.post("/pedidos/:id/rechazar", requireAuthRepartidor, async (req, res) => {
+  const authRepId = (req as any).repUserId;
+  try {
+    await sql`
+      INSERT INTO pedidos_rechazados (pedido_id, repartidor_id)
+      VALUES (${req.params.id}, ${authRepId})
+      ON CONFLICT (pedido_id, repartidor_id) DO NOTHING
+    `;
+    res.json({ ok: true, rechazado: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 

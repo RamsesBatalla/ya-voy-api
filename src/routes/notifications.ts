@@ -14,7 +14,7 @@ router.post("/token", async (req, res) => {
     await sql`
       INSERT INTO device_tokens (user_id, token, updated_at)
       VALUES (${userId}, ${token}, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET token = ${token}, updated_at = NOW()
+      ON CONFLICT (user_id, token) DO UPDATE SET updated_at = NOW()
     `
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }

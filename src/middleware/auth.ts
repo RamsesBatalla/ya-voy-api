@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express"
-import { supabase } from "../db"
+import { supabase, sql } from "../db"
 
 export const ADMIN_IDS = (process.env.ADMIN_USER_IDS || "").split(",").map(s => s.trim()).filter(Boolean)
 
@@ -64,4 +64,21 @@ export async function verifyTokenAny(token: string): Promise<string | null> {
   } catch {
     return token.startsWith("user_") || token.startsWith("rep_") ? token : null
   }
+}
+
+export async function requireNegocioOwner(req: Request, res: Response, next: NextFunction) {
+  const uid = (req as any).userId || (await extractUid(req))
+  if (!uid) return res.status(401).json({ error: "No autorizado" })
+  ;(req as any).userId = uid
+
+  const negocioId = req.params.id || req.body?.negocioId || req.body?.negocio_id
+  if (!negocioId || ADMIN_IDS.includes(uid)) return next()
+
+  try {
+    const rows = await sql`SELECT user_id FROM viveres WHERE id = ${negocioId} LIMIT 1`
+    if (rows.length && rows[0].user_id && rows[0].user_id !== uid) {
+      return res.status(403).json({ error: "No tienes permiso para administrar este negocio" })
+    }
+  } catch {}
+  next()
 }

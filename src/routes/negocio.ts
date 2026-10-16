@@ -1,132 +1,239 @@
-import { Router } from "express";
-import { sql } from "../db";
-import { requireAuth } from "../middleware/auth";
-import { invalidateCache } from "../cache";
+import { Router } from 'express';
+import { sql } from '../db';
+import { requireAuth, requireNegocioOwner } from '../middleware/auth';
+import { evaluarHorarioActual, getMexicoNow, sincronizarEstadoNegocio } from '../utils/horarios';
 
 const router = Router();
 
-router.patch("/:id/imagen",  requireAuth, async (req, res) => {
+// Toggle abrir / cerrar (cierre manual hoy se reinicia automáticamente al día siguiente según horario)
+router.patch('/:id/toggle', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
-    const { imagen_url } = req.body;
-    const rows = await sql`UPDATE viveres SET imagen_url = ${imagen_url} WHERE id = ${req.params.id} RETURNING *`;
-    invalidateCache("negocios:all")
+    const existing = await sql`SELECT * FROM viveres WHERE id = ${req.params.id} LIMIT 1`;
+    if (!existing.length) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+    const neg = existing[0];
+    const sync = await sincronizarEstadoNegocio(neg);
+    const nuevoAbierto = !sync.esta_abierto;
+    const mx = getMexicoNow();
+
+    const rows = await sql`
+      UPDATE viveres
+      SET esta_abierto = ${nuevoAbierto},
+          cierre_manual_fecha = ${nuevoAbierto ? null : mx.fechaStr},
+          apertura_manual_fecha = ${nuevoAbierto ? mx.fechaStr : null}
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
     res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-router.patch("/:id/toggle",  requireAuth, async (req, res) => {
+// Editar datos del negocio (incluyendo dirección exacta y coordenadas para envío)
+router.put('/:id', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
-    const rows = await sql`UPDATE viveres SET esta_abierto = NOT esta_abierto WHERE id = ${req.params.id} RETURNING *`;
-    invalidateCache("negocios:all")
-    res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
+    const {
+      nombre,
+      descripcion,
+      telefono,
+      direccion,
+      calle,
+      numero_ext,
+      numero_int,
+      colonia,
+      codigo_postal,
+      referencias,
+      imagen_url,
+      banner_url,
+      lat,
+      lng,
+    } = req.body;
 
-router.patch("/:id/pausar", requireAuth, async (req, res) => {
-  try {
-    await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS aceptando_pedidos BOOLEAN NOT NULL DEFAULT true`;
-    const rows = await sql`UPDATE viveres SET aceptando_pedidos = NOT aceptando_pedidos WHERE id = ${req.params.id} RETURNING *`;
-    invalidateCache("negocios:all")
-    res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
+    const latNum = lat != null && lat !== '' ? Number(lat) : null;
+    const lngNum = lng != null && lng !== '' ? Number(lng) : null;
 
-router.patch("/:id/perfil",  requireAuth, async (req, res) => {
-  try {
-    const { nombre, direccion, telefono, descripcion, tipo, categoria } = req.body;
-    const cleanTipo = tipo ? (tipo.toLowerCase().includes('tienda') ? 'tienda' : 'restaurante') : null;
     const rows = await sql`
       UPDATE viveres SET
-        nombre      = COALESCE(${nombre},      nombre),
-        direccion   = COALESCE(${direccion},   direccion),
-        telefono    = COALESCE(${telefono},    telefono),
-        descripcion = COALESCE(${descripcion}, descripcion),
-        tipo        = COALESCE(${cleanTipo},   tipo),
-        categoria   = COALESCE(${categoria},   categoria)
-      WHERE id = ${req.params.id} RETURNING *
+        nombre        = COALESCE(${nombre ?? null}, nombre),
+        descripcion   = COALESCE(${descripcion ?? null}, descripcion),
+        telefono      = COALESCE(${telefono ?? null}, telefono),
+        direccion     = COALESCE(${direccion ?? null}, direccion),
+        calle         = COALESCE(${calle ?? null}, calle),
+        numero_ext    = COALESCE(${numero_ext ?? null}, numero_ext),
+        numero_int    = COALESCE(${numero_int ?? null}, numero_int),
+        colonia       = COALESCE(${colonia ?? null}, colonia),
+        codigo_postal = COALESCE(${codigo_postal ?? null}, codigo_postal),
+        referencias   = COALESCE(${referencias ?? null}, referencias),
+        imagen_url    = COALESCE(${imagen_url ?? null}, imagen_url),
+        logo_url      = COALESCE(${imagen_url ?? null}, logo_url),
+        banner_url    = COALESCE(${banner_url ?? null}, banner_url),
+        lat           = COALESCE(${latNum}, lat),
+        latitud       = COALESCE(${latNum}, latitud),
+        lng           = COALESCE(${lngNum}, lng),
+        longitud      = COALESCE(${lngNum}, longitud)
+      WHERE id = ${req.params.id}
+      RETURNING *
     `;
-    invalidateCache("negocios:all");
     res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-router.get("/:id/calificaciones-aspectos", async (req, res) => {
-  try {
-    const [neg] = await sql`SELECT id, rating FROM viveres WHERE id = ${req.params.id} OR owner_id = ${req.params.id} LIMIT 1`;
-    const targetNegId = neg?.id || req.params.id;
-    const pedidosRows = await sql`
-      SELECT rating_restaurante, aspectos_restaurante 
-      FROM pedidos 
-      WHERE negocio_id = ${targetNegId} AND rating_restaurante IS NOT NULL
-      ORDER BY creado_en DESC LIMIT 100
-    `;
-    const ratingPromedio = neg?.rating ? Number(Number(neg.rating).toFixed(1)) : 0.0;
-    const aspectosConteo: Record<string, number> = {
-      "Sabor": 0,
-      "Empaque": 0,
-      "Puntualidad": 0,
-      "Presentación": 0,
-      "Temperatura": 0
-    };
-    let totalRatings = pedidosRows.length;
-    for (const p of pedidosRows) {
-      const asp = Array.isArray(p.aspectos_restaurante) ? p.aspectos_restaurante : (typeof p.aspectos_restaurante === 'string' ? JSON.parse(p.aspectos_restaurante) : []);
-      for (const a of asp) {
-        if (aspectosConteo[a] !== undefined) aspectosConteo[a]++;
-        else aspectosConteo[a] = 1;
-      }
-    }
-    res.json({
-      rating: ratingPromedio,
-      total: totalRatings,
-      aspectos: aspectosConteo
-    });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
-router.patch("/:id/horarios", requireAuth, async (req, res) => {
+// Guardar horarios y sincronizar inmediatamente el estado de apertura
+router.patch('/:id/horarios', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
     const { horarios } = req.body;
-    await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS horarios JSONB`;
-    const rows = await sql`UPDATE viveres SET horarios = ${JSON.stringify(horarios)}::jsonb WHERE id = ${req.params.id} RETURNING *`;
-    res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
+    const evalH = evaluarHorarioActual(horarios);
+    const abiertoSegunHorario = evalH.tieneHorarioConfigurado ? evalH.abiertoPorHorario : true;
 
-router.get("/:id/cupones", requireAuth, async (req, res) => {
-  try {
-    const rows = await sql`SELECT * FROM cupones WHERE negocio_id = ${req.params.id} ORDER BY creado_en DESC`;
-    res.json(rows);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
-router.post("/:id/cupones", requireAuth, async (req, res) => {
-  try {
-    const { codigo, tipo, valor, usos_max, expira_en, minimo_compra, nombre, descripcion } = req.body;
-    if (!codigo || !tipo || !valor) return res.status(400).json({ error: "codigo, tipo y valor requeridos" });
-    const existe = await sql`SELECT id FROM cupones WHERE codigo = ${codigo.toUpperCase().trim()}`;
-    if (existe.length) return res.status(409).json({ error: "Ya existe un cupon con ese codigo" });
     const rows = await sql`
-      INSERT INTO cupones (codigo, tipo, valor, usos_max, expira_en, minimo_compra, nombre, descripcion, negocio_id)
-      VALUES (${codigo.toUpperCase().trim()}, ${tipo}, ${valor}, ${usos_max || 100}, ${expira_en || null}, ${minimo_compra || 0}, ${nombre || null}, ${descripcion || null}, ${req.params.id})
-      RETURNING *`;
+      UPDATE viveres SET
+        horarios = ${JSON.stringify(horarios)},
+        esta_abierto = ${abiertoSegunHorario},
+        cierre_manual_fecha = NULL,
+        apertura_manual_fecha = NULL
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
     res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-router.patch("/:id/cupones/:cuponId", requireAuth, async (req, res) => {
+// Cambiar estado abierto/cerrado directo
+router.patch('/:id/estado', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
-    const { activo } = req.body;
-    const rows = await sql`UPDATE cupones SET activo = ${activo} WHERE id = ${req.params.cuponId} AND negocio_id = ${req.params.id} RETURNING *`;
+    const { abierto } = req.body;
+    const mx = getMexicoNow();
+    const rows = await sql`
+      UPDATE viveres SET
+        esta_abierto = ${abierto},
+        cierre_manual_fecha = ${abierto ? null : mx.fechaStr},
+        apertura_manual_fecha = ${abierto ? mx.fechaStr : null}
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
     res.json(rows[0]);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-router.delete("/:id/cupones/:cuponId", requireAuth, async (req, res) => {
+// Cambiar aceptando_pedidos (modo ocupado)
+router.patch('/:id/ocupado', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
-    await sql`DELETE FROM cupones WHERE id = ${req.params.cuponId} AND negocio_id = ${req.params.id}`;
-    res.json({ ok: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+    const { aceptando } = req.body;
+    const rows = await sql`
+      UPDATE viveres SET aceptando_pedidos = ${aceptando}
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `;
+    res.json(rows[0]);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
+
+// Estadísticas avanzadas del negocio (requiere propietario)
+router.get('/:id/stats', requireAuth, requireNegocioOwner, async (req, res) => {
+  try {
+    const id = req.params.id
+    const pedidos = await sql`
+      SELECT id, total, costo_envio, status, items, creado_en, rating_negocio, aspectos_negocio
+      FROM pedidos
+      WHERE negocio_id = ${id}
+      ORDER BY creado_en DESC
+    `
+
+    const entregados = pedidos.filter((p: any) => p.status === 'entregado')
+    const cancelados = pedidos.filter((p: any) => p.status === 'cancelado')
+
+    const cfgRows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','envio_minimo')`
+    const cfg: Record<string, number> = {}
+    cfgRows.forEach((r: any) => { cfg[r.clave] = parseFloat(r.valor) })
+    const comisionPct = (cfg.comision_pct ?? 18) / 100
+    const envioDefault = cfg.envio_minimo ?? 25
+
+    const calcNeto = (p: any) => {
+      const subtotal = Math.max(0, Number(p.total) - Number(p.costo_envio ?? envioDefault))
+      return subtotal * (1 - comisionPct)
+    }
+
+    // Ingresos por día — últimos 7 días
+    const hoy = new Date()
+    const ingresosPorDia: { fecha: string; label: string; ingresos: number; pedidos: number }[] = []
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(hoy)
+      d.setDate(hoy.getDate() - i)
+      const fechaStr = d.toISOString().split('T')[0]
+      const label = d.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' })
+      const delDia = entregados.filter((p: any) => p.creado_en?.startsWith(fechaStr))
+      ingresosPorDia.push({
+        fecha: fechaStr,
+        label,
+        ingresos: Math.round(delDia.reduce((s: number, p: any) => s + calcNeto(p), 0) * 100) / 100,
+        pedidos: delDia.length,
+      })
+    }
+
+    // Productos más vendidos
+    const conteoProductos: Record<string, { nombre: string; cantidad: number; ingresos: number }> = {}
+    entregados.forEach((p: any) => {
+      const items = Array.isArray(p.items) ? p.items : []
+      items.forEach((it: any) => {
+        const key = it.nombre || it.id
+        if (!conteoProductos[key]) conteoProductos[key] = { nombre: key, cantidad: 0, ingresos: 0 }
+        conteoProductos[key].cantidad += Number(it.cantidad || 1)
+        conteoProductos[key].ingresos += Number(it.precio || 0) * Number(it.cantidad || 1)
+      })
+    })
+    const topProductos = Object.values(conteoProductos)
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 5)
+
+    // Horas pico (distribución 0-23)
+    const porHora = Array.from({ length: 24 }, (_, h) => ({ hora: h, pedidos: 0 }))
+    entregados.forEach((p: any) => {
+      const h = new Date(p.creado_en).getHours()
+      if (h >= 0 && h < 24) porHora[h].pedidos++
+    })
+
+    // Tasa de cancelación y ticket promedio
+    const totalPedidos = pedidos.length
+    const tasaCancelacion = totalPedidos > 0 ? Math.round((cancelados.length / totalPedidos) * 100) : 0
+    const ticketPromedio = entregados.length > 0
+      ? Math.round((entregados.reduce((s: number, p: any) => s + calcNeto(p), 0) / entregados.length) * 100) / 100
+      : 0
+
+    // Conteo de aspectos calificados por clientes
+    const conteoAspectos: Record<string, number> = {}
+    let totalCalificados = 0
+    pedidos.forEach((p: any) => {
+      if (p.rating_negocio != null) totalCalificados++
+      if (Array.isArray(p.aspectos_negocio)) {
+        p.aspectos_negocio.forEach((asp: string) => {
+          if (asp) conteoAspectos[asp] = (conteoAspectos[asp] || 0) + 1
+        })
+      }
+    })
+
+    res.json({
+      ingresosPorDia,
+      topProductos,
+      porHora,
+      tasaCancelacion,
+      ticketPromedio,
+      totalEntregados: entregados.length,
+      totalCancelados: cancelados.length,
+      totalCalificados,
+      aspectos: conteoAspectos,
+    })
+  } catch (e: any) {
+    res.status(500).json({ error: e.message })
+  }
+})
 
 export default router;

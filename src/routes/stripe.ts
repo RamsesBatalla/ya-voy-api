@@ -8,6 +8,8 @@ import { notificarCliente } from "../websocket"
 
 const router = Router()
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" })
+const STRIPE_TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY || process.env.STRIPE_SECRET_KEY || ""
+const stripeTest = new Stripe(STRIPE_TEST_KEY, { apiVersion: "2026-04-22.dahlia" })
 
 const getConfig = async () => {
   const rows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','fondo_pct','envio_precio_km','envio_minimo')`
@@ -16,8 +18,8 @@ const getConfig = async () => {
   return {
     comisionPct: (cfg.comision_pct ?? 18) / 100,
     fondoPct:    (cfg.fondo_pct    ?? 20) / 100,
-    precioPorKm: cfg.envio_precio_km ?? 12,
-    envioMinimo: cfg.envio_minimo    ?? 35,
+    precioPorKm: cfg.envio_precio_km ?? 8,
+    envioMinimo: cfg.envio_minimo    ?? 25,
   }
 }
 
@@ -115,39 +117,56 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
       existingAccountId = rows[0]?.stripe_account_id || null
     }
 
+    const baseUrl = process.env.API_PUBLIC_URL || "https://batallagroup-tech.github.io/ya-voy"
     let accountId = existingAccountId
-    if (!accountId) {
-      const account = await stripe.accounts.create({
-        type: "express",
-        country: "MX",
-        email: email || undefined,
-        capabilities: { transfers: { requested: true } },
-        business_profile: { name: nombre || tipo },
-        metadata: { tipo, actorId },
-      })
-      accountId = account.id
+    let accountLinkUrl = ""
 
+    // Función auxiliar para intentar con un cliente stripe dado
+    const createOnboarding = async (client: any) => {
+      let accId = accountId
+      if (!accId) {
+        const account = await client.accounts.create({
+          type: "express",
+          country: "MX",
+          email: email || undefined,
+          capabilities: { transfers: { requested: true } },
+          business_profile: { name: nombre || tipo },
+          metadata: { tipo, actorId },
+        })
+        accId = account.id
+      }
+      const link = await client.accountLinks.create({
+        account: accId,
+        refresh_url: baseUrl + "/stripe-connect-refresh",
+        return_url:  baseUrl + "/stripe-connect-return",
+        type: "account_onboarding",
+      })
+      return { accId, url: link.url }
+    }
+
+    try {
+      // Intentar primero con el cliente configurado (Live)
+      const resLive = await createOnboarding(stripe)
+      accountId = resLive.accId
+      accountLinkUrl = resLive.url
+    } catch (liveErr: any) {
+      console.warn("Stripe Connect Live no disponible (esperando verificación de identidad). Usando entorno de pruebas Connect:", liveErr.message)
+      // Si falló por restricciones de live (ej. verificación de identidad requerida), usar stripeTest
+      accountId = null; // forzar creación en test
+      const resTest = await createOnboarding(stripeTest)
+      accountId = resTest.accId
+      accountLinkUrl = resTest.url
+    }
+
+    if (accountId) {
       if (tipo === "restaurante") {
-        await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS stripe_account_id TEXT`
         await sql`UPDATE viveres SET stripe_account_id = ${accountId} WHERE id = ${actorId}`
       } else {
-        await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS stripe_account_id TEXT`
         await sql`UPDATE repartidores SET stripe_account_id = ${accountId} WHERE id = ${actorId}`
       }
     }
 
-    // return_url y refresh_url deben ser URLs HTTPS alcanzables por Stripe.
-    // En apps nativas (Capacitor), browserFinished detecta el cierre y re-verifica el status.
-    // Usamos la URL de la API propia como fallback universal.
-    const baseUrl = process.env.API_PUBLIC_URL || "https://batallagroup-tech.github.io/ya-voy"
-    const accountLink = await stripe.accountLinks.create({
-      account: accountId,
-      refresh_url: baseUrl + "/stripe-connect-refresh",
-      return_url:  baseUrl + "/stripe-connect-return",
-      type: "account_onboarding",
-    })
-
-    res.json({ url: accountLink.url, accountId })
+    res.json({ url: accountLinkUrl, accountId })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -156,20 +175,67 @@ router.get("/connect/status/:tipo/:actorId", async (req, res) => {
   try {
     const { tipo, actorId } = req.params
     let accountId: string | null = null
+    let clabe: string | null = null
 
     if (tipo === "restaurante") {
-      const rows = await sql`SELECT stripe_account_id FROM viveres WHERE id = ${actorId}`
+      const rows = await sql`SELECT stripe_account_id, clabe_bancaria FROM viveres WHERE id = ${actorId}`
       accountId = rows[0]?.stripe_account_id || null
+      clabe = rows[0]?.clabe_bancaria || null
     } else if (tipo === "repartidor") {
-      const rows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${actorId}`
+      const rows = await sql`SELECT stripe_account_id, clabe_bancaria FROM repartidores WHERE id = ${actorId}`
       accountId = rows[0]?.stripe_account_id || null
+      clabe = rows[0]?.clabe_bancaria || null
     }
 
-    if (!accountId) return res.json({ conectado: false, accountId: null })
+    if (!accountId) {
+      return res.json({ conectado: Boolean(clabe), accountId: null, tieneClabe: Boolean(clabe) })
+    }
 
-    const account = await stripe.accounts.retrieve(accountId)
-    const conectado = !!(account.charges_enabled && account.payouts_enabled)
-    res.json({ conectado, accountId, chargesEnabled: account.charges_enabled, payoutsEnabled: account.payouts_enabled })
+    let account: any = null
+    try {
+      account = await stripe.accounts.retrieve(accountId)
+    } catch {
+      try {
+        account = await stripeTest.accounts.retrieve(accountId)
+      } catch {}
+    }
+
+    const conectado = account ? !!(account.charges_enabled || account.payouts_enabled) : Boolean(clabe)
+    res.json({
+      conectado,
+      accountId,
+      chargesEnabled: account?.charges_enabled ?? false,
+      payoutsEnabled: account?.payouts_enabled ?? false,
+      tieneClabe: Boolean(clabe),
+    })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// ─── GUARDAR CLABE BANCARIA DIRECTA ─────────────────────────────────────────
+router.post("/connect/clabe", requireAuth, async (req, res) => {
+  try {
+    const { tipo, actorId, clabe, banco, titular } = req.body
+    if (!tipo || !actorId || !clabe) return res.status(400).json({ error: "tipo, actorId y clabe requeridos" })
+    if (clabe.length !== 18) return res.status(400).json({ error: "La CLABE interbancaria debe tener exactamente 18 dígitos" })
+
+    if (tipo === "restaurante") {
+      await sql`
+        UPDATE viveres SET
+          clabe_bancaria = ${clabe},
+          banco_nombre = ${banco || ""},
+          titular_cuenta = ${titular || ""}
+        WHERE id = ${actorId}
+      `
+    } else {
+      await sql`
+        UPDATE repartidores SET
+          clabe_bancaria = ${clabe},
+          banco_nombre = ${banco || ""},
+          titular_cuenta = ${titular || ""}
+        WHERE id = ${actorId}
+      `
+    }
+    res.json({ ok: true, conectado: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 

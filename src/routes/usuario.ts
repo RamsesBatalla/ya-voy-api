@@ -5,11 +5,10 @@ import { sendPushToUser } from "../firebase";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
 import { getCache, setCache, invalidateCache } from "../cache";
 import { logError } from "../logger";
+import { sincronizarEstadoNegocio, getMexicoNow } from "../utils/horarios";
 
 const limitPedidos = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: "Demasiados pedidos, intenta en 15 minutos" } })
 const limitCupones = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: "Demasiados intentos, intenta en 15 minutos" } })
-
-
 
 const router = Router();
 
@@ -90,28 +89,82 @@ router.get("/productos/feed", async (_req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 router.get("/negocios", async (req, res) => {
   try {
-    const q = ((req.query.q as string) || "").trim()
+    const q = ((req.query.q as string) || "").trim();
+    const uLat = req.query.lat != null && req.query.lat !== "" ? Number(req.query.lat) : null;
+    const uLng = req.query.lng != null && req.query.lng !== "" ? Number(req.query.lng) : null;
+    const mx = getMexicoNow();
+
+    let rows: any[] = [];
     if (q.length >= 2) {
-      const rows = await sql`
+      rows = await sql`
         SELECT * FROM viveres
         WHERE status = 'aprobado'
           AND (nombre % ${q} OR nombre ILIKE ${'%' + q + '%'})
         ORDER BY esta_abierto DESC, similarity(nombre, ${q}) DESC, rating DESC NULLS LAST
-        LIMIT 50`
-      return res.json(rows)
+        LIMIT 50`;
+    } else {
+      rows = await sql`
+        SELECT * FROM viveres
+        WHERE status = 'aprobado'
+        ORDER BY esta_abierto DESC, aceptando_pedidos DESC NULLS LAST, rating DESC NULLS LAST
+        LIMIT 100`;
     }
 
-    const cached = getCache<any[]>("negocios:all")
-    if (cached) return res.json(cached)
+    const cfgEnvio = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('envio_minimo', 'envio_por_km')`.catch(() => []);
+    let envioMinimo = 25;
+    let envioPorKm = 8;
+    cfgEnvio.forEach((c: any) => {
+      if (c.clave === 'envio_minimo') envioMinimo = Number(c.valor) || 25;
+      if (c.clave === 'envio_por_km') envioPorKm = Number(c.valor) || 8;
+    });
 
-    const rows = await sql`SELECT * FROM viveres WHERE status = 'aprobado' ORDER BY esta_abierto DESC, aceptando_pedidos DESC NULLS LAST, rating DESC NULLS LAST`
-    setCache("negocios:all", rows, 30 * 1000)
-    res.json(rows);
+    const procesados = await Promise.all(
+      rows.map(async (n: any) => {
+        const sync = await sincronizarEstadoNegocio(n, mx);
+        const nLat = n.lat ?? n.latitud;
+        const nLng = n.lng ?? n.longitud;
+        let distKm: number | null = null;
+        let costoEnvioEstimado = envioMinimo;
 
+        if (uLat != null && uLng != null && nLat != null && nLng != null) {
+          distKm = Math.round(calcHaversineKm(uLat, uLng, nLat, nLng) * 10) / 10;
+          costoEnvioEstimado = Math.max(envioMinimo, Math.round(distKm * envioPorKm));
+        }
+
+        return {
+          ...n,
+          esta_abierto: sync.esta_abierto,
+          cierre_manual_hoy: sync.cierre_manual_hoy,
+          lat: nLat,
+          lng: nLng,
+          distancia_km: distKm,
+          costo_envio: costoEnvioEstimado,
+          imagen_url: n.imagen_url ?? n.logo_url ?? null,
+        };
+      })
+    );
+
+    // Si el usuario proporcionó ubicación, ordenar preferentemente por abiertos y distancia
+    if (uLat != null && uLng != null && !q) {
+      procesados.sort((a, b) => {
+        if (a.esta_abierto !== b.esta_abierto) return a.esta_abierto ? -1 : 1;
+        if (a.distancia_km != null && b.distancia_km != null) return a.distancia_km - b.distancia_km;
+        return 0;
+      });
+    }
+
+    res.json(procesados);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
-
 });
 
 // GET /api/usuario/buscar?q= — búsqueda fuzzy en negocios + productos
@@ -294,28 +347,21 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
     const palabrasRestaurante = genTres(codRest);
 
-    const negocioRows = await sql`SELECT esta_abierto, aceptando_pedidos, COALESCE(horarios, horario) as horarios FROM viveres WHERE id = ${negocioId}`
-    if (!negocioRows.length || !negocioRows[0].esta_abierto) return res.status(400).json({ error: "Este restaurante está cerrado en este momento." })
-    if (negocioRows[0].aceptando_pedidos === false) return res.status(400).json({ error: "Este restaurante pausó temporalmente los pedidos. Intenta en unos minutos." })
-    let horarios = negocioRows[0].horarios
-    if (typeof horarios === 'string') {
-      try { horarios = JSON.parse(horarios) } catch {}
+    const negocioRows = await sql`
+      SELECT id, esta_abierto, aceptando_pedidos, COALESCE(horarios, horario) as horarios,
+             cierre_manual_fecha, apertura_manual_fecha, nombre
+      FROM viveres WHERE id = ${negocioId}
+    `
+    if (!negocioRows.length) return res.status(404).json({ error: "Restaurante no encontrado." })
+    
+    const mx = getMexicoNow();
+    const syncNegocio = await sincronizarEstadoNegocio(negocioRows[0], mx);
+    if (!syncNegocio.esta_abierto) {
+      const msg = syncNegocio.mensajeCierre || "Este restaurante está cerrado en este momento.";
+      return res.status(400).json({ error: msg });
     }
-    if (horarios) {
-      const DIAS_MAP = ['Dom','Lun','Mar','Mie','Jue','Vie','Sab']
-      const now = new Date()
-      const diaKey = DIAS_MAP[now.getDay()]
-      const diaHorario = horarios[diaKey]
-      if (diaHorario && !diaHorario.abierto) return res.status(400).json({ error: "Este restaurante no atiende hoy." })
-      if (diaHorario?.desde && diaHorario?.hasta) {
-        const [hDesde, mDesde] = diaHorario.desde.split(':').map(Number)
-        const [hHasta, mHasta] = diaHorario.hasta.split(':').map(Number)
-        const minActual = now.getHours() * 60 + now.getMinutes()
-        const minDesde = hDesde * 60 + mDesde
-        const minHasta = hHasta * 60 + mHasta
-        if (minActual < minDesde || minActual > minHasta)
-          return res.status(400).json({ error: `Este restaurante atiende de ${diaHorario.desde} a ${diaHorario.hasta}.` })
-      }
+    if (negocioRows[0].aceptando_pedidos === false) {
+      return res.status(400).json({ error: "Este restaurante pausó temporalmente los pedidos. Intenta en unos minutos." });
     }
 
     const cfgLimite = await sql`SELECT valor FROM app_config WHERE clave = 'max_pedidos_simultaneos'`
@@ -323,14 +369,29 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     const pedidosRest = await sql`SELECT COUNT(*) as cnt FROM pedidos WHERE negocio_id = ${negocioId} AND status NOT IN ('entregado','cancelado')`
     if (parseInt(pedidosRest[0].cnt) >= maxPedidos) return res.status(429).json({ error: "Este restaurante tiene demasiados pedidos activos en este momento. Intenta en unos minutos." })
 
+    const totalNum = Number(totalCalculado) || 0;
+    const subtotalNum = Math.max(0, totalNum - (tipoEntrega === 'pickup' ? 0 : envio) - (Number(propina) || 0));
+
     const rows = await sql`
-
-      INSERT INTO pedidos (cliente_id, negocio_id, items, total, costo_envio, propina, direccion_entrega, notas, metodo_pago, status, codigo_entrega, codigo_restaurante, palabras_verificacion, lat_entrega, lng_entrega, tiempo_estimado, tiempo_estimado_min, payment_intent_id, tipo_entrega, programado_para)
-
-VALUES (${clienteId}, ${negocioId}, ${JSON.stringify(items)}, ${totalCalculado}, ${tipoEntrega === 'pickup' ? 0 : envio}, ${Number(propina) || 0}, ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'}, ${statusInicial === 'pendiente_pago' ? 'pendiente_pago' : programadoPara ? 'programado' : 'nuevo'}, ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })}, ${latEntrega || null}, ${lngEntrega || null}, ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${paymentIntentId || null}, ${tipoEntrega || 'domicilio'}, ${programadoPara || null})
-
+      INSERT INTO pedidos (
+        cliente_id, negocio_id, items,
+        total, monto_total, subtotal, costo_envio, propina,
+        direccion_entrega, notas, metodo_pago, status,
+        codigo_entrega, codigo_restaurante, palabras_verificacion,
+        lat_entrega, lng_entrega, latitud_entrega, longitud_entrega,
+        tiempo_estimado, tiempo_estimado_min, payment_intent_id,
+        tipo_entrega, programado_para
+      ) VALUES (
+        ${clienteId}, ${negocioId}, ${JSON.stringify(items)},
+        ${totalNum}, ${totalNum}, ${subtotalNum}, ${tipoEntrega === 'pickup' ? 0 : envio}, ${Number(propina) || 0},
+        ${direccionEntrega || ''}, ${notas || ''}, ${metodoPago || 'efectivo'},
+        ${statusInicial === 'pendiente_pago' ? 'pendiente_pago' : programadoPara ? 'programado' : 'nuevo'},
+        ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })},
+        ${latEntrega || null}, ${lngEntrega || null}, ${latEntrega || null}, ${lngEntrega || null},
+        ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${paymentIntentId || null},
+        ${tipoEntrega || 'domicilio'}, ${programadoPara || null}
+      )
       RETURNING *
-
     `;
 
     if (cuponCodigo) {
@@ -655,7 +716,16 @@ router.delete("/direcciones/:id", requireAuth, async (req, res) => {
     const rows = await sql`DELETE FROM direcciones WHERE id = ${req.params.id} AND usuario_id = ${authUserId} RETURNING usuario_id, principal`
     if (!rows.length) return res.status(404).json({ error: "Dirección no encontrada" })
     if (rows[0].principal) {
-      await sql`UPDATE direcciones SET principal = true WHERE usuario_id = ${authUserId} ORDER BY creado_en ASC LIMIT 1`
+      await sql`
+        UPDATE direcciones
+        SET principal = true
+        WHERE id = (
+          SELECT id FROM direcciones
+          WHERE usuario_id = ${authUserId}
+          ORDER BY creado_en ASC
+          LIMIT 1
+        )
+      `.catch(() => {})
     }
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }

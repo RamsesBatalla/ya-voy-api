@@ -97,6 +97,12 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
     const categoria = datos.tipo_negocio || datos.categoria || "Restaurante";
     const tipo = (datos.tipo_negocio || datos.categoria || 'restaurante').toLowerCase().includes('tienda') ? 'tienda' : 'restaurante';
     const direccion = datos.direccion || "";
+    const calle = datos.calle || "";
+    const numeroExt = datos.numero_ext || "";
+    const numeroInt = datos.numero_int || "";
+    const colonia = datos.colonia || "";
+    const codigoPostal = datos.codigo_postal || "";
+    const referencias = datos.referencias || "";
     const lat = datos.lat != null ? Number(datos.lat) : null;
     const lng = datos.lng != null ? Number(datos.lng) : null;
     const telefono = datos.telefono || "";
@@ -109,10 +115,14 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
     if (!negocioId) {
       const inserted = await sql`
         INSERT INTO viveres (
-          owner_id, nombre, categoria, tipo, direccion, latitud, lat, longitud, lng,
+          owner_id, nombre, categoria, tipo, direccion,
+          calle, numero_ext, numero_int, colonia, codigo_postal, referencias,
+          latitud, lat, longitud, lng,
           telefono, logo_url, imagen_url, esta_abierto, status, aceptando_pedidos
         ) VALUES (
-          ${usuarioId}, ${nombre}, ${categoria}, ${tipo}, ${direccion}, ${lat}, ${lat}, ${lng}, ${lng},
+          ${usuarioId}, ${nombre}, ${categoria}, ${tipo}, ${direccion},
+          ${calle}, ${numeroExt}, ${numeroInt}, ${colonia}, ${codigoPostal}, ${referencias},
+          ${lat}, ${lat}, ${lng}, ${lng},
           ${telefono}, ${logoUrl}, ${logoUrl}, true, 'aprobado', true
         ) RETURNING id
       `;
@@ -120,19 +130,25 @@ export async function aprobarRestaurante(solicitudId: string): Promise<{ ok: boo
     } else {
       await sql`
         UPDATE viveres SET
-          nombre = ${nombre},
-          categoria = ${categoria},
-          tipo = ${tipo},
-          direccion = COALESCE(NULLIF(${direccion}, ''), direccion),
-          latitud = COALESCE(${lat}, latitud),
-          lat = COALESCE(${lat}, lat),
-          longitud = COALESCE(${lng}, longitud),
-          lng = COALESCE(${lng}, lng),
-          telefono = COALESCE(NULLIF(${telefono}, ''), telefono),
-          logo_url = COALESCE(${logoUrl}, logo_url),
-          imagen_url = COALESCE(${logoUrl}, imagen_url),
-          status = 'aprobado',
-          esta_abierto = true,
+          nombre        = ${nombre},
+          categoria     = ${categoria},
+          tipo          = ${tipo},
+          direccion     = COALESCE(NULLIF(${direccion}, ''), direccion),
+          calle         = COALESCE(NULLIF(${calle}, ''), calle),
+          numero_ext    = COALESCE(NULLIF(${numeroExt}, ''), numero_ext),
+          numero_int    = COALESCE(NULLIF(${numeroInt}, ''), numero_int),
+          colonia       = COALESCE(NULLIF(${colonia}, ''), colonia),
+          codigo_postal = COALESCE(NULLIF(${codigoPostal}, ''), codigo_postal),
+          referencias   = COALESCE(NULLIF(${referencias}, ''), referencias),
+          latitud       = COALESCE(${lat}, latitud),
+          lat           = COALESCE(${lat}, lat),
+          longitud      = COALESCE(${lng}, longitud),
+          lng           = COALESCE(${lng}, lng),
+          telefono      = COALESCE(NULLIF(${telefono}, ''), telefono),
+          logo_url      = COALESCE(${logoUrl}, logo_url),
+          imagen_url    = COALESCE(${logoUrl}, imagen_url),
+          status        = 'aprobado',
+          esta_abierto  = true,
           aceptando_pedidos = true
         WHERE id = ${negocioId}
       `;

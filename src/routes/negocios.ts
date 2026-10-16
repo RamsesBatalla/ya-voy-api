@@ -2,12 +2,22 @@ import { Router } from 'express';
 import { sql } from '../db';
 import { notificarSolicitudRestaurante } from '../notificationsAdmin';
 import { logError } from '../logger';
+import { sincronizarEstadoNegocio } from '../utils/horarios';
 
 const router = Router();
 
 router.post('/solicitud', async (req, res) => {
   try {
     const { userId, tipo, datos, documentos } = req.body;
+
+    if (tipo === 'negocio' || !tipo) {
+      if (!datos?.direccion || !String(datos.direccion).trim()) {
+        return res.status(400).json({ error: 'La dirección exacta del negocio es obligatoria para calcular costos de envío.' });
+      }
+      if (datos?.lat == null || datos?.lng == null) {
+        return res.status(400).json({ error: 'Debes confirmar la ubicación exacta del restaurante en el mapa.' });
+      }
+    }
 
     await sql`
       INSERT INTO usuarios (id, email, nombre, rol)
@@ -26,7 +36,7 @@ router.post('/solicitud', async (req, res) => {
 
     const rows = await sql`
       INSERT INTO solicitudes (usuario_id, tipo, status, datos, documentos)
-      VALUES (${userId}, ${tipo}, 'pendiente', ${JSON.stringify(datos)}, ${JSON.stringify(documentos)})
+      VALUES (${userId}, ${tipo || 'negocio'}, 'pendiente', ${JSON.stringify(datos)}, ${JSON.stringify(documentos)})
       RETURNING *
     `;
 
@@ -69,8 +79,19 @@ router.get('/negocio/:userId', async (req, res) => {
     const rows = await sql`
       SELECT * FROM viveres WHERE owner_id = ${req.params.userId} LIMIT 1
     `;
-    res.json(rows[0] || null);
+    const neg = rows[0];
+    if (!neg) return res.json(null);
+    const sync = await sincronizarEstadoNegocio(neg);
+    res.json({
+      ...neg,
+      esta_abierto: sync.esta_abierto,
+      cierre_manual_hoy: sync.cierre_manual_hoy,
+      lat: neg.lat ?? neg.latitud ?? null,
+      lng: neg.lng ?? neg.longitud ?? null,
+      imagen_url: neg.imagen_url ?? neg.logo_url ?? null,
+    });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 export default router;
+
