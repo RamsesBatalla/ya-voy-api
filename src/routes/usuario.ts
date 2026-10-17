@@ -1040,6 +1040,9 @@ router.delete("/:userId", requireAuth, async (req, res) => {
     const activos = await sql`SELECT id FROM pedidos WHERE cliente_id = ${userId} AND status NOT IN ('entregado','cancelado','pago_fallido') LIMIT 1`
     if (activos.length) return res.status(400).json({ error: "Tienes pedidos activos. Espera a que finalicen antes de eliminar tu cuenta." })
 
+    const activosRepartidor = await sql`SELECT id FROM pedidos WHERE repartidor_id = ${userId} AND status NOT IN ('entregado','cancelado','pago_fallido') LIMIT 1`.catch(() => [])
+    if (activosRepartidor.length) return res.status(400).json({ error: "Tienes entregas activas en curso. Finalízalas antes de eliminar tu cuenta." })
+
     // 1. Eliminar fotos y archivos del usuario en Supabase Storage para no gastar almacenamiento
     const [usrRow] = await sql`SELECT foto_url, foto_perfil FROM usuarios WHERE id = ${userId}`.catch(() => [])
     if (usrRow?.foto_url) await deleteSupabaseStorageFile(usrRow.foto_url).catch(() => {})
@@ -1065,6 +1068,7 @@ router.delete("/:userId", requireAuth, async (req, res) => {
     await sql`DELETE FROM referidos WHERE referidor_id = ${userId} OR referido_id = ${userId}`.catch(() => {})
     await sql`DELETE FROM mensajes WHERE emisor_id = ${userId} OR remitente_id = ${userId}`.catch(() => {})
     await sql`DELETE FROM solicitudes WHERE usuario_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM repartidores WHERE id = ${userId} OR usuario_id = ${userId} OR user_id = ${userId}`.catch(() => {})
 
     // 3. Anonimizar pedidos históricos concluidos para conservar contabilidad del restaurante/repartidor sin datos personales del cliente
     await sql`UPDATE pedidos SET cliente_id = 'cuenta_eliminada', direccion_entrega = '', notas = '' WHERE cliente_id = ${userId}`.catch(() => {})
