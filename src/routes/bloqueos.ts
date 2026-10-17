@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { sql } from "../db"
 import { requireAdmin } from "../middleware/auth"
+import { notificarBloqueoAdmin } from "../notificationsAdmin"
 
 const router = Router()
 
@@ -56,14 +57,19 @@ router.post("/", requireAdmin, async (req, res) => {
     if (tipo === "usuario") {
       await sql`UPDATE usuarios SET bloqueado = true, razon_bloqueo = ${razon || ""}, bloqueado_en = NOW() WHERE id = ${actorId}`
     } else if (tipo === "repartidor") {
-      await sql`UPDATE repartidores SET bloqueado = true, razon_bloqueo = ${razon || ""} WHERE id = ${actorId}`
+      await sql`UPDATE repartidores SET bloqueado = true, razon_bloqueo = ${razon || ""}, en_linea = false, disponible = false, status = 'offline' WHERE id = ${actorId}`
     } else if (tipo === "negocio") {
-      await sql`UPDATE viveres SET bloqueado = true, razon_bloqueo = ${razon || ""} WHERE id = ${actorId}`
+      await sql`UPDATE viveres SET bloqueado = true, razon_bloqueo = ${razon || ""}, esta_abierto = false, aceptando_pedidos = false WHERE id::text = ${actorId}`
     } else {
       return res.status(400).json({ error: "tipo invalido" })
     }
 
     await sql`INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon) VALUES (${tipo}, ${actorId}, ${razon || ""})`
+    notificarBloqueoAdmin({
+      tipoActor: tipo === "negocio" ? "restaurante" : tipo === "repartidor" ? "repartidor" : "cliente",
+      actorId: String(actorId),
+      razon: razon || "Bloqueo administrativo",
+    }).catch(() => {})
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

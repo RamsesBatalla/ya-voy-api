@@ -2,6 +2,7 @@ import { Router } from "express"
 import { sql } from "../db"
 import { requireAuth } from "../middleware/auth"
 import { sendPushToUser } from "../firebase"
+import { notificarCliente } from "../websocket"
 
 const router = Router()
 
@@ -22,8 +23,7 @@ initTable().catch(e => console.error("Error init mensajes:", e.message))
 // GET /api/mensajes/:pedidoId — obtener mensajes de un pedido
 router.get("/:pedidoId", requireAuth, async (req, res) => {
   try {
-    // Solo permitir chat en pedidos activos
-    const pedidos = await sql`SELECT status FROM pedidos WHERE id = ${req.params.pedidoId}`
+    const pedidos = await sql`SELECT status FROM pedidos WHERE id::text = ${req.params.pedidoId}`
     if (!pedidos.length) return res.status(404).json({ error: "Pedido no encontrado" })
     const rows = await sql`
       SELECT id, pedido_id, emisor_id as remitente_id, rol_emisor as remitente_tipo, mensaje as texto, leido, creado_en
@@ -33,7 +33,7 @@ router.get("/:pedidoId", requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/mensajes — enviar mensaje
+// POST /api/mensajes — enviar mensaje en tiempo real (WebSocket + Push)
 // body: { pedidoId, remitenteId, remitenteTipo: "cliente"|"repartidor", texto }
 router.post("/", requireAuth, async (req, res) => {
   try {
@@ -41,35 +41,44 @@ router.post("/", requireAuth, async (req, res) => {
     if (!pedidoId || !remitenteId || !remitenteTipo || !texto?.trim())
       return res.status(400).json({ error: "Campos requeridos" })
 
-    // Solo en pedidos en_camino o esperando_cliente
-    const pedidos = await sql`SELECT status FROM pedidos WHERE id = ${pedidoId}`
+    const pedidos = await sql`SELECT status FROM pedidos WHERE id::text = ${pedidoId}`
     if (!pedidos.length) return res.status(404).json({ error: "Pedido no encontrado" })
     const { status } = pedidos[0]
-    if (!["en_camino", "esperando_cliente"].includes(status))
-      return res.status(400).json({ error: "Chat solo disponible cuando el pedido esta en camino" })
+    if (!["preparando", "listo", "en_camino", "esperando_cliente"].includes(status))
+      return res.status(400).json({ error: "El chat solo está disponible mientras tu pedido está activo" })
 
     const rows = await sql`
       INSERT INTO mensajes (pedido_id, emisor_id, rol_emisor, mensaje)
-      VALUES (${pedidoId}, ${remitenteId}, ${remitenteTipo}, ${texto.trim()})
+      VALUES (${String(pedidoId)}, ${remitenteId}, ${remitenteTipo}, ${texto.trim()})
       RETURNING id, pedido_id, emisor_id as remitente_id, rol_emisor as remitente_tipo, mensaje as texto, leido, creado_en`
 
-    // Notificar a los destinatarios (todos excepto el emisor)
+    const msgPayload = {
+      pedidoId: String(pedidoId),
+      mensaje: rows[0],
+    }
+
+    // Notificar en tiempo real (WebSocket + Push) a los destinatarios
     const pedidoRows = await sql`
-      SELECT p.cliente_id, p.repartidor_id, v.owner_id
+      SELECT p.cliente_id, p.repartidor_id, COALESCE(v.owner_id, v.user_id) as owner_id
       FROM pedidos p
-      JOIN viveres v ON v.id = p.negocio_id
-      WHERE p.id = ${pedidoId}`
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id::text = ${pedidoId}`
     if (pedidoRows.length) {
       const { cliente_id, repartidor_id, owner_id } = pedidoRows[0]
-      const notifTitle = "Nuevo mensaje"
+      const notifTitle = remitenteTipo === "repartidor" ? "🛵 Mensaje de tu repartidor" : "💬 Mensaje del cliente"
       const notifBody = texto.trim().length > 60 ? texto.trim().slice(0, 57) + "..." : texto.trim()
-      const data = { pedidoId, tipo: "chat" }
-      if (remitenteTipo !== "cliente" && cliente_id)
-        await sendPushToUser(sql, cliente_id, notifTitle, notifBody, data)
-      if (remitenteTipo !== "repartidor" && repartidor_id)
-        await sendPushToUser(sql, repartidor_id, notifTitle, notifBody, data)
-      if (remitenteTipo !== "restaurante" && owner_id)
-        await sendPushToUser(sql, owner_id, notifTitle, notifBody, data)
+      const data = { pedidoId: String(pedidoId), tipo: "chat" }
+      if (remitenteTipo !== "cliente" && cliente_id) {
+        notificarCliente(cliente_id, "nuevo_mensaje", msgPayload)
+        sendPushToUser(sql, cliente_id, notifTitle, notifBody, data).catch(() => {})
+      }
+      if (remitenteTipo !== "repartidor" && repartidor_id) {
+        notificarCliente(repartidor_id, "nuevo_mensaje", msgPayload)
+        sendPushToUser(sql, repartidor_id, notifTitle, notifBody, data).catch(() => {})
+      }
+      if (remitenteTipo !== "restaurante" && owner_id) {
+        notificarCliente(owner_id, "nuevo_mensaje", msgPayload)
+      }
     }
 
     res.json(rows[0])

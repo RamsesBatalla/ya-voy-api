@@ -4,7 +4,7 @@ import { notificarCliente } from "../websocket";
 import { sendPushToUser } from "../firebase";
 import { requireAuthRepartidor } from "../middleware/auth";
 import { logError } from "../logger";
-import { notificarSolicitudRepartidor } from "../notificationsAdmin";
+import { notificarSolicitudRepartidor, notificarContingenciaAdmin } from "../notificationsAdmin";
 
 // Transiciones válidas por rol repartidor
 const TRANS_REPARTIDOR: Record<string, string[]> = {
@@ -25,7 +25,7 @@ router.post("/solicitud", async (req, res) => {
     const datos = JSON.stringify({ nombre, telefono, email, vehiculo_tipo, vehiculo_modelo, vehiculo_placas });
     const docs   = JSON.stringify({ ine_frente: ine_frente_url, ine_reverso: ine_reverso_url, selfie: selfie_url, tarjeta_url });
     let solicitudId = "";
-    const existing = await sql`SELECT id FROM solicitudes WHERE usuario_id = ${userId} AND tipo = 'repartidor'`;
+    const existing = await sql`SELECT id FROM solicitudes WHERE usuario_id = ${userId} AND tipo = 'repartidor' ORDER BY creado_en DESC LIMIT 1`;
     if (existing.length > 0) {
       solicitudId = existing[0].id;
       await sql`UPDATE solicitudes SET datos = ${datos}::jsonb, documentos = ${docs}::jsonb, status = 'pendiente', razon_rechazo = NULL, actualizado_en = NOW() WHERE usuario_id = ${userId} AND tipo = 'repartidor'`;
@@ -57,7 +57,7 @@ router.post("/solicitud", async (req, res) => {
 // GET /api/repartidor/solicitud/:userId
 router.get("/solicitud/:userId", async (req, res) => {
   try {
-    const rows = await sql`SELECT * FROM solicitudes WHERE usuario_id = ${req.params.userId} AND tipo = 'repartidor'`;
+    const rows = await sql`SELECT * FROM solicitudes WHERE usuario_id = ${req.params.userId} AND tipo = 'repartidor' ORDER BY actualizado_en DESC NULLS LAST, creado_en DESC LIMIT 1`;
     if (!rows.length) return res.status(404).json({ error: "No encontrado" });
     res.json(rows[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -119,6 +119,7 @@ router.get("/pedidos/disponibles", requireAuthRepartidor, async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.cliente_id
       WHERE p.status IN ('preparando', 'listo')
         AND (p.repartidor_id IS NULL OR p.repartidor_id = '')
+        AND COALESCE(p.tipo_entrega, 'domicilio') != 'pickup'
         AND p.id::text NOT IN (
           SELECT pedido_id FROM pedidos_rechazados WHERE repartidor_id = ${authRepId}
         )
@@ -175,18 +176,55 @@ router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => 
     const authRepId = (req as any).repUserId;
     const repartidorId = req.body.repartidorId || authRepId;
 
-    // Verificar si el repartidor ya tiene un pedido activo sin entregar
+    // Gestión inteligente de múltiples pedidos según distancia y tiempos:
+    // Se permite llevar hasta 2 pedidos activos SOLO si el restaurante nuevo está a <= 1.8 km
+    // del restaurante actual y el cliente nuevo está a <= 2.5 km del cliente actual.
     const activos = await sql`
-      SELECT id FROM pedidos
-      WHERE repartidor_id = ${repartidorId}
-        AND status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
-      LIMIT 1
+      SELECT p.id, p.lat_entrega, p.lng_entrega,
+             COALESCE(v.lat, v.latitud) as lat_rest,
+             COALESCE(v.lng, v.longitud) as lng_rest
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.repartidor_id = ${repartidorId}
+        AND p.status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
+        AND p.id::text != ${req.params.id}
     `;
-    if (activos.length > 0 && String(activos[0].id) !== String(req.params.id)) {
-      return res.status(409).json({ error: "Ya tienes un pedido activo en curso. Termínalo antes de aceptar otro." });
+    if (activos.length >= 2) {
+      return res.status(409).json({
+        error: "Ya llevas el máximo de 2 pedidos activos en ruta. Completa una entrega antes de aceptar otro."
+      });
+    }
+    if (activos.length === 1) {
+      const act = activos[0];
+      const candRows = await sql`
+        SELECT p.id, p.lat_entrega, p.lng_entrega,
+               COALESCE(v.lat, v.latitud) as lat_rest,
+               COALESCE(v.lng, v.longitud) as lng_rest
+        FROM pedidos p
+        LEFT JOIN viveres v ON v.id = p.negocio_id
+        WHERE p.id::text = ${req.params.id}
+        LIMIT 1
+      `;
+      const cand = candRows[0];
+      if (cand) {
+        const hasRestCoords = act.lat_rest != null && act.lng_rest != null && cand.lat_rest != null && cand.lng_rest != null;
+        const hasCliCoords = act.lat_entrega != null && act.lng_entrega != null && cand.lat_entrega != null && cand.lng_entrega != null;
+        if (!hasRestCoords || !hasCliCoords) {
+          return res.status(409).json({
+            error: "Ya tienes un pedido activo en curso. Termínalo antes de aceptar otro."
+          });
+        }
+        const distRestKm = calcHaversineKm(Number(act.lat_rest), Number(act.lng_rest), Number(cand.lat_rest), Number(cand.lng_rest));
+        const distCliKm = calcHaversineKm(Number(act.lat_entrega), Number(act.lng_entrega), Number(cand.lat_entrega), Number(cand.lng_entrega));
+        if (distRestKm > 1.8 || distCliKm > 2.5) {
+          return res.status(409).json({
+            error: `Este pedido está lejos de tu entrega actual (restaurantes a ${distRestKm.toFixed(1)} km / destinos a ${distCliKm.toFixed(1)} km). Solo puedes llevar 2 pedidos simultáneos cuando ambos quedan cercanos en la misma ruta.`
+          });
+        }
+      }
     }
 
-    // Actualización atómica: el primero que presiona se queda el pedido
+    // Actualización atómica: el primero que presiona se queda el pedido (excluyendo pedidos pickup)
     const rows = await sql`
       UPDATE pedidos
       SET repartidor_id = ${repartidorId},
@@ -194,6 +232,7 @@ router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => 
           actualizado_en = NOW()
       WHERE id::text = ${req.params.id}
         AND (repartidor_id IS NULL OR repartidor_id = '')
+        AND COALESCE(tipo_entrega, 'domicilio') != 'pickup'
         AND status IN ('preparando', 'listo', 'nuevo')
       RETURNING *
     `;
@@ -310,14 +349,32 @@ router.patch("/pedidos/:id/esperando", requireAuthRepartidor, async (req, res) =
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Auto-expirar espera (llamado desde cliente cuando el timer expira)
+// Auto-expirar espera (llamado desde cliente cuando el timer expira, exigiendo foto de evidencia)
 router.patch("/pedidos/:id/expirar-espera", requireAuthRepartidor, async (req, res) => {
   try {
-    const rows = await sql`SELECT status, esperando_desde FROM pedidos WHERE id::text = ${req.params.id}`;
+    const rows = await sql`SELECT status, esperando_desde, foto_entrega, foto_entrega_url, cliente_id, repartidor_id FROM pedidos WHERE id::text = ${req.params.id}`;
     if (!rows.length || rows[0].status !== "esperando_cliente") return res.status(400).json({ error: "No aplica" });
-    const minutos = (Date.now() - new Date(rows[0].esperando_desde).getTime()) / 60000;
+    const p = rows[0];
+    const fotoEvidencia = p.foto_entrega || p.foto_entrega_url || req.body?.fotoUrl;
+    if (!fotoEvidencia) {
+      return res.status(400).json({
+        error: "Debes tomar y subir la foto de evidencia en el punto de entrega antes de finalizar el tiempo de espera."
+      });
+    }
+    const minutos = (Date.now() - new Date(p.esperando_desde).getTime()) / 60000;
     if (minutos < 10) return res.status(400).json({ error: "Aún no han pasado 10 minutos" });
-    await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW(), actualizado_en = NOW() WHERE id::text = ${req.params.id}`;
+    const [updated] = await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW(), actualizado_en = NOW() WHERE id::text = ${req.params.id} RETURNING *`;
+    if (p.cliente_id) {
+      notificarCliente(p.cliente_id, "pedido_update", updated);
+    }
+    notificarContingenciaAdmin({
+      titulo: "Espera de 10 min expirada (Cliente no salió)",
+      pedidoId: String(req.params.id),
+      detalle: "El repartidor esperó 10 minutos en el punto de entrega con foto de evidencia verificada.",
+      actorTipo: "cliente",
+      actorId: p.cliente_id,
+      fotoEvidenciaUrl: fotoEvidencia,
+    }).catch(() => {});
     res.json({ ok: true, expirado: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });

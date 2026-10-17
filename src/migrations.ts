@@ -193,8 +193,11 @@ export async function runMigrations() {
         creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS usuario_id TEXT`;
     await sql`ALTER TABLE repartidores ALTER COLUMN usuario_id DROP NOT NULL`.catch(() => {});
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS calificacion NUMERIC DEFAULT 0.0`;
     await sql`ALTER TABLE repartidores ALTER COLUMN calificacion SET DEFAULT 0.0`.catch(() => {});
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS total_entregas INTEGER DEFAULT 0`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS user_id TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS email TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS vehiculo TEXT DEFAULT 'moto'`;
@@ -207,6 +210,7 @@ export async function runMigrations() {
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS en_linea BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT true`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS verificado BOOLEAN DEFAULT true`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT true`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat_actual DOUBLE PRECISION`;
@@ -220,6 +224,7 @@ export async function runMigrations() {
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS titular_cuenta TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS razon_bloqueo TEXT`;
+    await sql`UPDATE repartidores SET usuario_id = COALESCE(user_id, id) WHERE usuario_id IS NULL`.catch(() => {});
     await sql`UPDATE repartidores SET user_id = COALESCE(usuario_id, id) WHERE user_id IS NULL`.catch(() => {});
     await sql`UPDATE repartidores SET vehiculo = vehiculo_tipo WHERE vehiculo IS NULL AND vehiculo_tipo IS NOT NULL`.catch(() => {});
     await sql`UPDATE repartidores SET placa = COALESCE(vehiculo_placas, placas) WHERE placa IS NULL`.catch(() => {});
@@ -354,6 +359,9 @@ export async function runMigrations() {
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_restaurante JSONB DEFAULT '[]'::jsonb`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_repartidor JSONB DEFAULT '[]'::jsonb`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_cliente JSONB DEFAULT '[]'::jsonb`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS intentos_codigo INT DEFAULT 0`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_confirmado BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS wallet_monto NUMERIC DEFAULT 0`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
     await sql`UPDATE pedidos SET total = monto_total WHERE (total IS NULL OR total = 0) AND monto_total IS NOT NULL AND monto_total > 0`.catch(() => {});
     await sql`UPDATE pedidos SET monto_total = total WHERE (monto_total IS NULL OR monto_total = 0) AND total IS NOT NULL AND total > 0`.catch(() => {});

@@ -9,14 +9,23 @@ import { invalidateCache } from "../cache"
 // Transiciones válidas por rol restaurante
 const TRANS_RESTAURANTE: Record<string, string[]> = {
   pendiente_pago:    [],
+  programado:        ["preparando", "cancelado"],
   nuevo:             ["preparando", "cancelado"],
   preparando:        ["listo", "cancelado"],
-  listo:             ["cancelado"],
+  listo:             ["entregado", "cancelado"],
   en_camino:         [],
   esperando_cliente: [],
   entregado:         [],
   cancelado:         [],
   pago_fallido:      ["cancelado"],
+}
+
+function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 const router = Router()
@@ -31,7 +40,7 @@ initFotoCols().catch(e => console.error("Error init foto cols:", e.message))
 router.get("/:negocioId/pedidos", requireAuth, async (req, res) => {
   try {
     const authUserId = (req as any).userId
-    const ownerCheck = await sql`SELECT id FROM viveres WHERE id = ${req.params.negocioId} AND owner_id = ${authUserId}`
+    const ownerCheck = await sql`SELECT id FROM viveres WHERE id = ${req.params.negocioId} AND (owner_id = ${authUserId} OR user_id = ${authUserId})`
     if (!ownerCheck.length) return res.status(403).json({ error: "No autorizado" })
 
     const rows = await sql`
@@ -48,7 +57,7 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
     const authUserId = (req as any).userId
     const { status } = req.body
     const current = await sql`
-      SELECT p.status, v.owner_id FROM pedidos p
+      SELECT p.status, p.tipo_entrega, COALESCE(v.owner_id, v.user_id) as owner_id FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       WHERE p.id = ${req.params.id}`
     if (!current.length) return res.status(404).json({ error: "Pedido no encontrado" })
@@ -59,7 +68,8 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
 
     const rows = await sql`
       UPDATE pedidos SET status = ${status},
-        entregado_en = CASE WHEN ${status} = 'entregado' THEN NOW() ELSE entregado_en END
+        entregado_en = CASE WHEN ${status} = 'entregado' THEN NOW() ELSE entregado_en END,
+        actualizado_en = NOW()
       WHERE id = ${req.params.id} RETURNING *`
     const pedido = rows[0]
     if (!pedido) return res.status(404).json({ error: "Pedido no encontrado" })
@@ -67,9 +77,12 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
 
     if (pedido.cliente_id) notificarCliente(pedido.cliente_id, "pedido_update", pedido)
 
-    const negocio = await sql`SELECT owner_id, nombre FROM viveres WHERE id = ${pedido.negocio_id}`
+    const negocio = await sql`SELECT COALESCE(owner_id, user_id) as owner_id, nombre, COALESCE(lat, latitud) as lat, COALESCE(lng, longitud) as lng FROM viveres WHERE id = ${pedido.negocio_id}`
     const ownerID = negocio[0]?.owner_id
     const negNombre = negocio[0]?.nombre || "el restaurante"
+    const negLat = negocio[0]?.lat != null ? Number(negocio[0].lat) : null
+    const negLng = negocio[0]?.lng != null ? Number(negocio[0].lng) : null
+    const esPickup = COALESCE_STR(pedido.tipo_entrega) === "pickup"
 
     if (status === "nuevo" && ownerID) {
       notificarCliente(ownerID, "nuevo_pedido", pedido)
@@ -79,7 +92,10 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
       await sendPushToUser(sql, pedido.cliente_id, "👨‍🍳 Preparando tu pedido", negNombre + " aceptó tu pedido y lo está preparando", { pedidoId: pedido.id, status: "preparando" }).catch(() => {})
     }
     if (status === "listo" && pedido.cliente_id) {
-      await sendPushToUser(sql, pedido.cliente_id, "✅ Tu pedido está listo", negNombre + " terminó de preparar tu pedido", { pedidoId: pedido.id, status: "listo" }).catch(() => {})
+      const cuerpoListo = esPickup
+        ? `Tu pedido en ${negNombre} está listo para recoger en mostrador. Muestra tu clave de entrega al personal.`
+        : `${negNombre} terminó de preparar tu pedido.`
+      await sendPushToUser(sql, pedido.cliente_id, esPickup ? "🏃 ¡Pedido listo para recoger!" : "✅ Tu pedido está listo", cuerpoListo, { pedidoId: pedido.id, status: "listo" }).catch(() => {})
     }
     if (status === "en_camino" && pedido.cliente_id) {
       const eta = pedido.tiempo_estimado ? ` (${pedido.tiempo_estimado})` : ""
@@ -92,29 +108,27 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
       await sendPushToUser(sql, pedido.cliente_id, "🎉 Pedido entregado", "¡Que lo disfrutes! No olvides calificar tu experiencia", { pedidoId: pedido.id, status: "entregado" }).catch(() => {})
     }
 
-    if (status === "entregado" && pedido.repartidor_id) {
-      try {
-        const cfgRow = await sql`SELECT valor FROM app_config WHERE clave = 'comision_pct'`
-        const comisionPct = cfgRow.length ? parseFloat(cfgRow[0].valor) / 100 : 0.18
-        const comision = Math.round(Number(pedido.total || 0) * comisionPct * 100) / 100
-        if (pedido.metodo_pago === "efectivo") {
-          await sql`UPDATE repartidores SET deuda_efectivo = COALESCE(deuda_efectivo, 0) + ${comision} WHERE id = ${pedido.repartidor_id}`
-        } else if (pedido.metodo_pago === "tarjeta") {
-          await sql`UPDATE repartidores SET deuda_efectivo = GREATEST(0, COALESCE(deuda_efectivo, 0) - ${comision}) WHERE id = ${pedido.repartidor_id}`
-        }
-      } catch (e: any) { logError(e, "comision:entregado") }
-    }
-
-    // Notificar a repartidores disponibles tanto cuando pasa a "preparando" como cuando pasa a "listo"
-    if (status === "preparando" || status === "listo") {
+    // Notificar a repartidores disponibles SOLO cuando NO es pickup ("Recoger en tienda")
+    if (!esPickup && (status === "preparando" || status === "listo")) {
       if (pedido.repartidor_id) {
         notificarCliente(pedido.repartidor_id, "pedido_update", pedido)
         if (status === "listo") {
           await sendPushToUser(sql, pedido.repartidor_id, "🍽️ ¡Pedido listo para recoger!", `El pedido en ${negNombre} ya está listo. Recuerda verificar la palabra clave con el restaurante.`, { pedidoId: String(pedido.id), status: "listo" }).catch(() => {})
         }
       } else {
-        const repartidoresOnline = await sql`SELECT id FROM repartidores WHERE status = 'online' OR en_linea = true`
+        const cfgRows = await sql`SELECT valor FROM app_config WHERE clave = 'radio_max_repartidor_km' LIMIT 1`.catch(() => [])
+        const radioMaxRepKm = Number(cfgRows[0]?.valor) || 10
+        const repartidoresOnline = await sql`
+          SELECT id, COALESCE(lat_actual, latitud, lat) as lat, COALESCE(lng_actual, longitud, lng) as lng
+          FROM repartidores
+          WHERE (status = 'online' OR en_linea = true) AND COALESCE(bloqueado, false) = false
+        `
         for (const r of repartidoresOnline) {
+          // Filtrar por radio máximo de 10 km si el repartidor y el restaurante tienen coordenadas
+          if (negLat != null && negLng != null && r.lat != null && r.lng != null) {
+            const dist = calcHaversineKm(negLat, negLng, Number(r.lat), Number(r.lng))
+            if (dist > radioMaxRepKm) continue
+          }
           notificarCliente(r.id, "pedido_disponible", { ...pedido, negocio_nombre: negNombre })
           const tituloPush = status === "preparando" ? "🛵 Nuevo pedido disponible" : "🍽️ Pedido listo para recoger"
           const cuerpoPush = status === "preparando"
@@ -136,6 +150,10 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
     }
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
+
+function COALESCE_STR(val: any): string {
+  return val ? String(val).trim().toLowerCase() : "domicilio"
+}
 
 router.patch("/pedidos/:id/rechazar", requireAuth, async (req, res) => {
   try {

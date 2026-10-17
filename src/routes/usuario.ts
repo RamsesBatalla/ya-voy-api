@@ -1,13 +1,17 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
+import Stripe from "stripe";
 import { sql, supabase } from "../db";
 import { deleteSupabaseStorageFile } from "../services/solicitudesService";
+import { notificarBloqueoAdmin } from "../notificationsAdmin";
 import { sendPushToUser } from "../firebase";
 import { notificarCliente } from "../websocket";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
 import { getCache, setCache, invalidateCache } from "../cache";
 import { logError } from "../logger";
 import { sincronizarEstadoNegocio, getMexicoNow } from "../utils/horarios";
+
+const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" });
 
 const limitPedidos = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: "Demasiados pedidos, intenta en 15 minutos" } })
 const limitCupones = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: "Demasiados intentos, intenta en 15 minutos" } })
@@ -399,9 +403,20 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
       }
     }
 
+    // Prevención de fraude: Tope máximo de $400 MXN en efectivo para clientes nuevos (< 3 pedidos entregados)
+    if ((metodoPago || 'efectivo') === 'efectivo' && Number(totalCalculado) > 400) {
+      const histRows = await sql`SELECT COUNT(*) as cnt FROM pedidos WHERE cliente_id = ${clienteId} AND status = 'entregado'`.catch(() => [{ cnt: 0 }]);
+      const entregadosCount = Number(histRows[0]?.cnt || 0);
+      if (entregadosCount < 3) {
+        return res.status(400).json({
+          error: "Por seguridad, en tus primeros 3 pedidos el límite máximo para pago en efectivo es de $400 MXN. Para montos mayores por favor utiliza pago con tarjeta."
+        });
+      }
+    }
+
     const cfgLimite = await sql`SELECT valor FROM app_config WHERE clave = 'max_pedidos_simultaneos'`
     const maxPedidos = cfgLimite.length ? parseInt(cfgLimite[0].valor) : 10
-    const pedidosRest = await sql`SELECT COUNT(*) as cnt FROM pedidos WHERE negocio_id = ${negocioId} AND status NOT IN ('entregado','cancelado')`
+    const pedidosRest = await sql`SELECT COUNT(*) as cnt FROM pedidos WHERE negocio_id = ${negocioId} AND status NOT IN ('entregado','cancelado','pendiente_pago')`
     if (parseInt(pedidosRest[0].cnt) >= maxPedidos) return res.status(429).json({ error: "Este restaurante tiene demasiados pedidos activos en este momento. Intenta en unos minutos." })
 
     const totalNum = Number(totalCalculado) || 0;
@@ -415,7 +430,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         codigo_entrega, codigo_restaurante, palabras_verificacion,
         lat_entrega, lng_entrega, latitud_entrega, longitud_entrega,
         tiempo_estimado, tiempo_estimado_min, distancia_km, payment_intent_id,
-        tipo_entrega, programado_para
+        tipo_entrega, programado_para, wallet_monto, cupon_codigo
       ) VALUES (
         ${clienteId}, ${negocioId}, ${JSON.stringify(items)},
         ${totalNum}, ${totalNum}, ${subtotalNum}, ${tipoEntrega === 'pickup' ? 0 : envio}, ${Number(propina) || 0},
@@ -424,7 +439,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })},
         ${latEntrega || null}, ${lngEntrega || null}, ${latEntrega || null}, ${lngEntrega || null},
         ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${distRestClienteKm}, ${paymentIntentId || null},
-        ${tipoEntrega || 'domicilio'}, ${programadoPara || null}
+        ${tipoEntrega || 'domicilio'}, ${programadoPara || null}, ${Number(walletMonto) || 0}, ${cuponCodigo || null}
       )
       RETURNING *
     `;
@@ -440,9 +455,9 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
       await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${Number(walletMonto)}, 'Aplicado en pedido', ${nuevoPedido.id})`.catch(e => logError(e, "wallet:mov"))
     }
 
-    // Notificar en tiempo real al propietario del restaurante cuando el pedido ya está activo ('nuevo')
+    // Notificar en tiempo real al propietario del restaurante cuando el pedido ya está activo ('nuevo' o 'programado')
     const ownerId = negocioRows[0].owner_id;
-    if (ownerId && nuevoPedido.status === 'nuevo') {
+    if (ownerId && (nuevoPedido.status === 'nuevo' || nuevoPedido.status === 'programado')) {
       notificarCliente(ownerId, "nuevo_pedido", nuevoPedido);
       notificarCliente(ownerId, "pedido_update", nuevoPedido);
       sendPushToUser(
@@ -450,7 +465,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         ownerId,
         "🔔 ¡Nuevo pedido recibido!",
         `Tienes un nuevo pedido por $${Number(nuevoPedido.total || 0).toFixed(2)}. Revísalo y acéptalo en la app.`,
-        { pedidoId: String(nuevoPedido.id), status: "nuevo", tipo: "nuevo_pedido" }
+        { pedidoId: String(nuevoPedido.id), status: nuevoPedido.status, tipo: "nuevo_pedido" }
       ).catch(e => logError(e, "push:nuevo_pedido"));
     }
 
@@ -458,6 +473,97 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 
+});
+
+// POST /api/usuario/pedidos/:id/confirmar-pago — Activa el pedido tras completarse PaymentSheet de Stripe en el cliente
+router.post("/pedidos/:id/confirmar-pago", requireAuthUsuario, async (req, res) => {
+  try {
+    const authUserId = (req as any).usrUserId;
+    const { paymentIntentId } = req.body;
+    const rows = await sql`
+      SELECT p.*, COALESCE(v.owner_id, v.user_id) as owner_id, v.nombre as negocio_nombre
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id::text = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!rows.length) return res.status(404).json({ error: "Pedido no encontrado" });
+    const pedido = rows[0];
+    if (pedido.cliente_id !== authUserId) return res.status(403).json({ error: "No autorizado" });
+
+    // Si ya fue activado por el webhook, devolverlo directamente
+    if (pedido.status !== "pendiente_pago") {
+      return res.json({ ok: true, pedido });
+    }
+
+    const piId = paymentIntentId || pedido.payment_intent_id;
+    if (piId) {
+      try {
+        const pi = await stripeClient.paymentIntents.retrieve(piId);
+        if (!["succeeded", "processing", "requires_capture"].includes(pi.status)) {
+          return res.status(400).json({ error: `El pago aún no se ha completado (estado: ${pi.status}).` });
+        }
+      } catch (e: any) {
+        logError(e, "confirmar-pago:retrieve");
+      }
+    }
+
+    const nuevoStatus = pedido.programado_para ? "programado" : "nuevo";
+    const [updated] = await sql`
+      UPDATE pedidos
+      SET status = ${nuevoStatus},
+          pago_confirmado = true,
+          payment_intent_id = COALESCE(${piId || null}, payment_intent_id),
+          actualizado_en = NOW()
+      WHERE id = ${pedido.id}
+      RETURNING *
+    `;
+
+    if (pedido.owner_id) {
+      notificarCliente(pedido.owner_id, "nuevo_pedido", updated);
+      notificarCliente(pedido.owner_id, "pedido_update", updated);
+      sendPushToUser(
+        sql,
+        pedido.owner_id,
+        "🔔 ¡Nuevo pedido pagado con tarjeta!",
+        `Tienes un nuevo pedido confirmado por $${Number(updated.total || 0).toFixed(2)} en ${pedido.negocio_nombre || "tu restaurante"}.`,
+        { pedidoId: String(updated.id), status: nuevoStatus, tipo: "nuevo_pedido" }
+      ).catch(() => {});
+    }
+
+    res.json({ ok: true, pedido: updated });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/usuario/pedidos/:id/borrador — Elimina borrador pendiente_pago si el usuario cancela el PaymentSheet
+router.delete("/pedidos/:id/borrador", requireAuthUsuario, async (req, res) => {
+  try {
+    const authUserId = (req as any).usrUserId;
+    const rows = await sql`
+      SELECT * FROM pedidos
+      WHERE id::text = ${req.params.id} AND cliente_id = ${authUserId} AND status = 'pendiente_pago'
+      LIMIT 1
+    `;
+    if (!rows.length) return res.json({ ok: true });
+    const p = rows[0];
+
+    // Reintegrar saldo de wallet si se había descontado en el borrador
+    if (p.wallet_monto && Number(p.wallet_monto) > 0) {
+      await sql`UPDATE usuarios SET wallet_balance = COALESCE(wallet_balance, 0) + ${Number(p.wallet_monto)} WHERE id = ${authUserId}`.catch(() => {});
+      await sql`DELETE FROM wallet_movimientos WHERE pedido_id = ${String(p.id)}`.catch(() => {});
+    }
+    // Reintegrar uso de cupón si se había aplicado
+    if (p.cupon_codigo) {
+      await sql`UPDATE cupones SET usos_actual = GREATEST(0, COALESCE(usos_actual, 1) - 1) WHERE codigo = ${p.cupon_codigo}`.catch(() => {});
+    }
+
+    await sql`DELETE FROM pedidos WHERE id = ${p.id} AND status = 'pendiente_pago'`;
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 
@@ -502,6 +608,7 @@ router.get("/pedidos/:userId", requireAuthUsuario, async (req, res) => {
       FROM pedidos p LEFT JOIN viveres v ON v.id = p.negocio_id
       LEFT JOIN repartidores r ON r.id = p.repartidor_id
       WHERE p.cliente_id = ${req.params.userId}
+        AND p.status != 'pendiente_pago'
       ORDER BY p.creado_en DESC LIMIT ${limit} OFFSET ${offset}
     `;
 
@@ -525,7 +632,7 @@ router.patch("/pedidos/confirmar", requireAuthUsuario, async (req, res) => {
     if (rows[0].cliente_id !== (req as any).usrUserId) return res.status(403).json({ error: "Acceso denegado" });
 
     if (rows[0].codigo_entrega !== codigo) return res.status(400).json({ error: "Codigo incorrecto" });
-    if (!["esperando_cliente", "en_camino"].includes(rows[0].status)) return res.status(400).json({ error: "El pedido no esta listo para confirmar entrega" });
+    if (!["esperando_cliente", "en_camino", "listo"].includes(rows[0].status)) return res.status(400).json({ error: "El pedido no esta listo para confirmar entrega" });
 
     const [updated] = await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW(), actualizado_en = NOW() WHERE id = ${pedidoId} RETURNING *`;
     if (rows[0].repartidor_id) {
@@ -539,7 +646,7 @@ router.patch("/pedidos/confirmar", requireAuthUsuario, async (req, res) => {
     }
     if (rows[0].negocio_id) {
       const neg = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${rows[0].negocio_id}`.catch(() => []);
-      if (neg[0]?.owner_id) notificarCliente(neg[0].owner_id, "pedido_update", updated);
+      if (neg[0]?.owner_id) notificarCliente(neg[0]?.owner_id, "pedido_update", updated);
     }
 
     res.json({ ok: true });
@@ -565,7 +672,49 @@ router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
     const pedido = rows[0];
 
     if (String(pedido.codigo_restaurante || "").trim().toUpperCase() !== String(palabra).trim().toUpperCase()) {
-      return res.json({ ok: false, error: "Palabra incorrecta. Pídele la clave correcta al restaurante." });
+      const nuevosIntentos = Number(pedido.intentos_codigo || 0) + 1;
+      await sql`UPDATE pedidos SET intentos_codigo = ${nuevosIntentos} WHERE id = ${pedido.id}`;
+
+      if (nuevosIntentos >= 2 && pedido.repartidor_id) {
+        const repId = String(pedido.repartidor_id);
+        const razon = "2 intentos fallidos de palabra clave al recolectar en restaurante";
+        const [repInfo] = await sql`SELECT nombre, telefono, email FROM repartidores WHERE id = ${repId} OR usuario_id = ${repId} LIMIT 1`.catch(() => []);
+        await sql`
+          UPDATE repartidores
+          SET bloqueado = true, razon_bloqueo = ${razon}, en_linea = false, disponible = false, status = 'offline'
+          WHERE id = ${repId} OR usuario_id = ${repId}
+        `.catch(() => {});
+        await sql`
+          INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon, bloqueado_por)
+          VALUES ('repartidor', ${repId}, ${razon}, 'sistema')
+        `.catch(() => {});
+        // Liberar el pedido para que otro repartidor pueda tomarlo
+        await sql`UPDATE pedidos SET repartidor_id = NULL, asignado_en = NULL, intentos_codigo = 0 WHERE id = ${pedido.id}`.catch(() => {});
+
+        notificarBloqueoAdmin({
+          tipoActor: "repartidor",
+          actorId: repId,
+          nombre: repInfo?.nombre || "Repartidor",
+          telefono: repInfo?.telefono,
+          email: repInfo?.email,
+          razon,
+          pedidoId: String(pedido.id),
+        }).catch(() => {});
+
+        return res.json({
+          ok: false,
+          bloqueado: true,
+          intentosRestantes: 0,
+          error: "Cuenta bloqueada preventivamente por 2 intentos fallidos de palabra clave. Soporte revisará tu caso.",
+        });
+      }
+
+      return res.json({
+        ok: false,
+        bloqueado: false,
+        intentosRestantes: Math.max(0, 2 - nuevosIntentos),
+        error: "Palabra incorrecta. Pídele la clave correcta al restaurante (te queda 1 intento).",
+      });
     }
 
     const [updated] = await sql`
@@ -573,6 +722,7 @@ router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
       SET verificado_restaurante = true,
           recolectado_en = NOW(),
           status = 'en_camino',
+          intentos_codigo = 0,
           actualizado_en = NOW()
       WHERE id = ${pedido.id}
       RETURNING *
@@ -607,7 +757,7 @@ router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
   }
 });
 
-// POST /api/usuario/pedidos/:id/verificar-entrega — Repartidor verifica palabra clave del cliente al entregar el pedido
+// POST /api/usuario/pedidos/:id/verificar-entrega — Repartidor (o Restaurante en pickup) verifica palabra clave del cliente al entregar el pedido
 router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
   try {
     const { palabra } = req.body;
@@ -624,13 +774,54 @@ router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
     const pedido = rows[0];
 
     if (String(pedido.codigo_entrega || "").trim().toUpperCase() !== String(palabra).trim().toUpperCase()) {
-      return res.json({ ok: false, error: "Palabra incorrecta. Verifica la clave con el cliente." });
+      const nuevosIntentos = Number(pedido.intentos_codigo || 0) + 1;
+      await sql`UPDATE pedidos SET intentos_codigo = ${nuevosIntentos} WHERE id = ${pedido.id}`;
+
+      if (nuevosIntentos >= 2 && pedido.repartidor_id) {
+        const repId = String(pedido.repartidor_id);
+        const razon = "2 intentos fallidos de palabra clave al entregar al cliente";
+        const [repInfo] = await sql`SELECT nombre, telefono, email FROM repartidores WHERE id = ${repId} OR usuario_id = ${repId} LIMIT 1`.catch(() => []);
+        await sql`
+          UPDATE repartidores
+          SET bloqueado = true, razon_bloqueo = ${razon}, en_linea = false, disponible = false, status = 'offline'
+          WHERE id = ${repId} OR usuario_id = ${repId}
+        `.catch(() => {});
+        await sql`
+          INSERT INTO bloqueos_historial (tipo_usuario, actor_id, razon, bloqueado_por)
+          VALUES ('repartidor', ${repId}, ${razon}, 'sistema')
+        `.catch(() => {});
+
+        notificarBloqueoAdmin({
+          tipoActor: "repartidor",
+          actorId: repId,
+          nombre: repInfo?.nombre || "Repartidor",
+          telefono: repInfo?.telefono,
+          email: repInfo?.email,
+          razon,
+          pedidoId: String(pedido.id),
+        }).catch(() => {});
+
+        return res.json({
+          ok: false,
+          bloqueado: true,
+          intentosRestantes: 0,
+          error: "Cuenta bloqueada preventivamente por 2 intentos fallidos de palabra clave. Soporte revisará tu caso.",
+        });
+      }
+
+      return res.json({
+        ok: false,
+        bloqueado: false,
+        intentosRestantes: Math.max(0, 2 - nuevosIntentos),
+        error: "Palabra incorrecta. Verifica la clave con el cliente (te queda 1 intento).",
+      });
     }
 
     const [updated] = await sql`
       UPDATE pedidos
       SET status = 'entregado',
           entregado_en = NOW(),
+          intentos_codigo = 0,
           actualizado_en = NOW()
       WHERE id = ${pedido.id}
       RETURNING *
@@ -644,14 +835,6 @@ router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
               total_entregas = COALESCE(total_entregas, 0) + 1
           WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}
         `;
-        const cfgRow = await sql`SELECT valor FROM app_config WHERE clave = 'comision_pct'`;
-        const comisionPct = cfgRow.length ? parseFloat(cfgRow[0].valor) / 100 : 0.18;
-        const comision = Math.round(Number(pedido.total || 0) * comisionPct * 100) / 100;
-        if (pedido.metodo_pago === "efectivo") {
-          await sql`UPDATE repartidores SET deuda_efectivo = COALESCE(deuda_efectivo, 0) + ${comision} WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}`;
-        } else if (pedido.metodo_pago === "tarjeta") {
-          await sql`UPDATE repartidores SET deuda_efectivo = GREATEST(0, COALESCE(deuda_efectivo, 0) - ${comision}) WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}`;
-        }
       } catch (e: any) {
         logError(e, "verificar-entrega:repartidor");
       }
