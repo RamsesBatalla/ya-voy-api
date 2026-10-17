@@ -3,18 +3,36 @@ import { supabase, sql } from "../db"
 
 export const ADMIN_IDS = (process.env.ADMIN_USER_IDS || "").split(",").map(s => s.trim()).filter(Boolean)
 
+function decodeJwtSub(token: string): string | null {
+  try {
+    const parts = token.split(".")
+    if (parts.length !== 3) return null
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"))
+    if (payload?.sub && typeof payload.sub === "string" && payload?.aud === "authenticated") {
+      return payload.sub
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 async function extractUid(req: Request): Promise<string | null> {
   const token = req.headers["authorization"]?.replace("Bearer ", "")
   if (!token) return null
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token)
+    const { data: { user } } = await supabase.auth.getUser(token)
     if (user?.id) return user.id
+    const jwtSub = decodeJwtSub(token)
+    if (jwtSub) return jwtSub
     // Fallback for dev/test user ID string headers
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
     return null
   } catch {
+    const jwtSub = decodeJwtSub(token)
+    if (jwtSub) return jwtSub
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
@@ -60,8 +78,13 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 export async function verifyTokenAny(token: string): Promise<string | null> {
   try {
     const { data: { user } } = await supabase.auth.getUser(token)
-    return user?.id || (token.startsWith("user_") || token.startsWith("rep_") ? token : null)
+    if (user?.id) return user.id
+    const jwtSub = decodeJwtSub(token)
+    if (jwtSub) return jwtSub
+    return token.startsWith("user_") || token.startsWith("rep_") ? token : null
   } catch {
+    const jwtSub = decodeJwtSub(token)
+    if (jwtSub) return jwtSub
     return token.startsWith("user_") || token.startsWith("rep_") ? token : null
   }
 }
@@ -75,8 +98,8 @@ export async function requireNegocioOwner(req: Request, res: Response, next: Nex
   if (!negocioId || ADMIN_IDS.includes(uid)) return next()
 
   try {
-    const rows = await sql`SELECT user_id FROM viveres WHERE id = ${negocioId} LIMIT 1`
-    if (rows.length && rows[0].user_id && rows[0].user_id !== uid) {
+    const rows = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id::text = ${negocioId} LIMIT 1`
+    if (rows.length && rows[0].owner_id && rows[0].owner_id !== uid) {
       return res.status(403).json({ error: "No tienes permiso para administrar este negocio" })
     }
   } catch {}

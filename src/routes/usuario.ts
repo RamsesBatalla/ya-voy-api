@@ -1,7 +1,8 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { sql } from "../db";
+import { sql, supabase, deleteSupabaseStorageFile } from "../db";
 import { sendPushToUser } from "../firebase";
+import { notificarCliente } from "../websocket";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
 import { getCache, setCache, invalidateCache } from "../cache";
 import { logError } from "../logger";
@@ -68,27 +69,6 @@ const initTablas = async () => {
 
 initTablas().catch(e => console.error("Error init tablas:", e.message))
 
-
-
-router.get("/productos/feed", async (_req, res) => {
-
-  try {
-
-    const rows = await sql`
-
-      SELECT p.*, v.nombre as negocio_nombre, v.id as negocio_id,
-             v.imagen_url as negocio_imagen, COALESCE(v.rating, 0.0) as negocio_rating,
-             v.esta_abierto as negocio_abierto
-      FROM productos p
-      JOIN viveres v ON v.id::text = p.negocio_id
-      WHERE p.disponible = true AND v.status = 'aprobado'
-      ORDER BY v.esta_abierto DESC, p.destacado DESC, v.rating DESC NULLS LAST, p.nombre
-      LIMIT 80
-    `;
-    res.json(rows);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
 function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -96,6 +76,38 @@ function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number)
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+router.get("/productos/feed", async (req, res) => {
+  try {
+    const uLat = req.query.lat != null && req.query.lat !== "" ? Number(req.query.lat) : null;
+    const uLng = req.query.lng != null && req.query.lng !== "" ? Number(req.query.lng) : null;
+    const cfgRows = await sql`SELECT valor FROM app_config WHERE clave = 'radio_max_usuario_km' LIMIT 1`.catch(() => []);
+    const radioMaxKm = Number(cfgRows[0]?.valor) || 10;
+
+    const rows = await sql`
+      SELECT p.*, v.nombre as negocio_nombre, v.id as negocio_id,
+             v.imagen_url as negocio_imagen, COALESCE(v.rating, 0.0) as negocio_rating,
+             v.esta_abierto as negocio_abierto,
+             COALESCE(v.lat, v.latitud) as negocio_lat,
+             COALESCE(v.lng, v.longitud) as negocio_lng
+      FROM productos p
+      JOIN viveres v ON v.id::text = p.negocio_id::text
+      WHERE p.disponible = true AND v.status = 'aprobado'
+      ORDER BY v.esta_abierto DESC, p.destacado DESC, v.rating DESC NULLS LAST, p.nombre
+      LIMIT 100
+    `;
+
+    const filtrados = rows.filter((r: any) => {
+      if (uLat != null && uLng != null && !isNaN(uLat) && !isNaN(uLng) && r.negocio_lat != null && r.negocio_lng != null) {
+        const d = calcHaversineKm(uLat, uLng, Number(r.negocio_lat), Number(r.negocio_lng));
+        if (d > radioMaxKm) return false;
+      }
+      return true;
+    }).slice(0, 80);
+
+    res.json(filtrados);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 router.get("/negocios", async (req, res) => {
   try {
@@ -120,15 +132,17 @@ router.get("/negocios", async (req, res) => {
         LIMIT 100`;
     }
 
-    const cfgEnvio = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('envio_minimo', 'envio_por_km')`.catch(() => []);
+    const cfgEnvio = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('envio_minimo', 'envio_por_km', 'radio_max_usuario_km')`.catch(() => []);
     let envioMinimo = 25;
     let envioPorKm = 8;
+    let radioMaxUsuarioKm = 10;
     cfgEnvio.forEach((c: any) => {
       if (c.clave === 'envio_minimo') envioMinimo = Number(c.valor) || 25;
       if (c.clave === 'envio_por_km') envioPorKm = Number(c.valor) || 8;
+      if (c.clave === 'radio_max_usuario_km') radioMaxUsuarioKm = Number(c.valor) || 10;
     });
 
-    const procesados = await Promise.all(
+    const procesadosRaw = await Promise.all(
       rows.map(async (n: any) => {
         const sync = await sincronizarEstadoNegocio(n, mx);
         const nLat = n.lat ?? n.latitud;
@@ -136,8 +150,8 @@ router.get("/negocios", async (req, res) => {
         let distKm: number | null = null;
         let costoEnvioEstimado = envioMinimo;
 
-        if (uLat != null && uLng != null && nLat != null && nLng != null) {
-          distKm = Math.round(calcHaversineKm(uLat, uLng, nLat, nLng) * 10) / 10;
+        if (uLat != null && uLng != null && !isNaN(uLat) && !isNaN(uLng) && nLat != null && nLng != null) {
+          distKm = Math.round(calcHaversineKm(uLat, uLng, Number(nLat), Number(nLng)) * 10) / 10;
           costoEnvioEstimado = Math.max(envioMinimo, Math.round(distKm * envioPorKm));
         }
 
@@ -153,6 +167,14 @@ router.get("/negocios", async (req, res) => {
         };
       })
     );
+
+    // Filtrar negocios que excedan el radio máximo permitido para el usuario (ej. 10 km)
+    const procesados = procesadosRaw.filter((n: any) => {
+      if (n.distancia_km != null && n.distancia_km > radioMaxUsuarioKm) {
+        return false;
+      }
+      return true;
+    });
 
     // Si el usuario proporcionó ubicación, ordenar preferentemente por abiertos y distancia
     if (uLat != null && uLng != null && !q) {
@@ -348,9 +370,10 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     const palabrasRestaurante = genTres(codRest);
 
     const negocioRows = await sql`
-      SELECT id, esta_abierto, aceptando_pedidos, COALESCE(horarios, horario) as horarios,
-             cierre_manual_fecha, apertura_manual_fecha, nombre
-      FROM viveres WHERE id = ${negocioId}
+      SELECT id, COALESCE(owner_id, user_id) as owner_id, esta_abierto, aceptando_pedidos, COALESCE(horarios, '{}'::jsonb) as horarios,
+             cierre_manual_fecha, apertura_manual_fecha, nombre,
+             COALESCE(lat, latitud) as lat, COALESCE(lng, longitud) as lng
+      FROM viveres WHERE id::text = ${negocioId}
     `
     if (!negocioRows.length) return res.status(404).json({ error: "Restaurante no encontrado." })
     
@@ -362,6 +385,17 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     }
     if (negocioRows[0].aceptando_pedidos === false) {
       return res.status(400).json({ error: "Este restaurante pausó temporalmente los pedidos. Intenta en unos minutos." });
+    }
+
+    // Validar distancia máxima permitida entre restaurante y dirección de entrega
+    const cfgRadio = await sql`SELECT valor FROM app_config WHERE clave = 'radio_max_usuario_km' LIMIT 1`.catch(() => []);
+    const radioMaxUsuarioKm = Number(cfgRadio[0]?.valor) || 10;
+    let distRestClienteKm: number | null = null;
+    if (latEntrega != null && lngEntrega != null && negocioRows[0].lat != null && negocioRows[0].lng != null) {
+      distRestClienteKm = Math.round(calcHaversineKm(Number(latEntrega), Number(lngEntrega), Number(negocioRows[0].lat), Number(negocioRows[0].lng)) * 10) / 10;
+      if (distRestClienteKm > radioMaxUsuarioKm) {
+        return res.status(400).json({ error: `Este restaurante se encuentra a ${distRestClienteKm} km de tu dirección (el límite máximo de entrega es ${radioMaxUsuarioKm} km).` });
+      }
     }
 
     const cfgLimite = await sql`SELECT valor FROM app_config WHERE clave = 'max_pedidos_simultaneos'`
@@ -379,7 +413,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         direccion_entrega, notas, metodo_pago, status,
         codigo_entrega, codigo_restaurante, palabras_verificacion,
         lat_entrega, lng_entrega, latitud_entrega, longitud_entrega,
-        tiempo_estimado, tiempo_estimado_min, payment_intent_id,
+        tiempo_estimado, tiempo_estimado_min, distancia_km, payment_intent_id,
         tipo_entrega, programado_para
       ) VALUES (
         ${clienteId}, ${negocioId}, ${JSON.stringify(items)},
@@ -388,11 +422,13 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         ${statusInicial === 'pendiente_pago' ? 'pendiente_pago' : programadoPara ? 'programado' : 'nuevo'},
         ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })},
         ${latEntrega || null}, ${lngEntrega || null}, ${latEntrega || null}, ${lngEntrega || null},
-        ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${paymentIntentId || null},
+        ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${distRestClienteKm}, ${paymentIntentId || null},
         ${tipoEntrega || 'domicilio'}, ${programadoPara || null}
       )
       RETURNING *
     `;
+
+    const nuevoPedido = rows[0];
 
     if (cuponCodigo) {
       await sql`UPDATE cupones SET usos_actual = usos_actual + 1 WHERE codigo = ${cuponCodigo}`.catch(e => logError(e, "cupones:usos"))
@@ -400,10 +436,24 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
 
     if (walletMonto && Number(walletMonto) > 0) {
       await sql`UPDATE usuarios SET wallet_balance = GREATEST(0, COALESCE(wallet_balance,0) - ${Number(walletMonto)}) WHERE id = ${clienteId}`.catch(e => logError(e, "wallet:debito"))
-      await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${Number(walletMonto)}, 'Aplicado en pedido', ${rows[0].id})`.catch(e => logError(e, "wallet:mov"))
+      await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${Number(walletMonto)}, 'Aplicado en pedido', ${nuevoPedido.id})`.catch(e => logError(e, "wallet:mov"))
     }
 
-    res.json(rows[0]);
+    // Notificar en tiempo real al propietario del restaurante cuando el pedido ya está activo ('nuevo')
+    const ownerId = negocioRows[0].owner_id;
+    if (ownerId && nuevoPedido.status === 'nuevo') {
+      notificarCliente(ownerId, "nuevo_pedido", nuevoPedido);
+      notificarCliente(ownerId, "pedido_update", nuevoPedido);
+      sendPushToUser(
+        sql,
+        ownerId,
+        "🔔 ¡Nuevo pedido recibido!",
+        `Tienes un nuevo pedido por $${Number(nuevoPedido.total || 0).toFixed(2)}. Revísalo y acéptalo en la app.`,
+        { pedidoId: String(nuevoPedido.id), status: "nuevo", tipo: "nuevo_pedido" }
+      ).catch(e => logError(e, "push:nuevo_pedido"));
+    }
+
+    res.json(nuevoPedido);
 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 
@@ -468,7 +518,7 @@ router.patch("/pedidos/confirmar", requireAuthUsuario, async (req, res) => {
 
     const { pedidoId, codigo } = req.body;
 
-    const rows = await sql`SELECT codigo_entrega, status, cliente_id FROM pedidos WHERE id = ${pedidoId}`;
+    const rows = await sql`SELECT codigo_entrega, status, cliente_id, repartidor_id, negocio_id FROM pedidos WHERE id = ${pedidoId}`;
 
     if (!rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
     if (rows[0].cliente_id !== (req as any).usrUserId) return res.status(403).json({ error: "Acceso denegado" });
@@ -476,12 +526,162 @@ router.patch("/pedidos/confirmar", requireAuthUsuario, async (req, res) => {
     if (rows[0].codigo_entrega !== codigo) return res.status(400).json({ error: "Codigo incorrecto" });
     if (!["esperando_cliente", "en_camino"].includes(rows[0].status)) return res.status(400).json({ error: "El pedido no esta listo para confirmar entrega" });
 
-    await sql`UPDATE pedidos SET status = 'entregado' WHERE id = ${pedidoId}`;
+    const [updated] = await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW(), actualizado_en = NOW() WHERE id = ${pedidoId} RETURNING *`;
+    if (rows[0].repartidor_id) {
+      await sql`
+        UPDATE repartidores
+        SET entregas_count = COALESCE(entregas_count, 0) + 1,
+            total_entregas = COALESCE(total_entregas, 0) + 1
+        WHERE id = ${rows[0].repartidor_id} OR usuario_id = ${rows[0].repartidor_id}
+      `.catch(() => {});
+      notificarCliente(rows[0].repartidor_id, "pedido_update", updated);
+    }
+    if (rows[0].negocio_id) {
+      const neg = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${rows[0].negocio_id}`.catch(() => []);
+      if (neg[0]?.owner_id) notificarCliente(neg[0].owner_id, "pedido_update", updated);
+    }
 
     res.json({ ok: true });
 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 
+});
+
+// POST /api/usuario/pedidos/:id/verificar-restaurante — Repartidor verifica palabra clave en el restaurante al recoger el pedido
+router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
+  try {
+    const { palabra } = req.body;
+    if (!palabra) return res.status(400).json({ ok: false, error: "Palabra clave requerida" });
+
+    const rows = await sql`
+      SELECT p.*, COALESCE(v.owner_id, v.user_id) as negocio_owner_id, v.nombre as negocio_nombre
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id::text = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!rows.length) return res.status(404).json({ ok: false, error: "Pedido no encontrado" });
+    const pedido = rows[0];
+
+    if (String(pedido.codigo_restaurante || "").trim().toUpperCase() !== String(palabra).trim().toUpperCase()) {
+      return res.json({ ok: false, error: "Palabra incorrecta. Pídele la clave correcta al restaurante." });
+    }
+
+    const [updated] = await sql`
+      UPDATE pedidos
+      SET verificado_restaurante = true,
+          recolectado_en = NOW(),
+          status = 'en_camino',
+          actualizado_en = NOW()
+      WHERE id = ${pedido.id}
+      RETURNING *
+    `;
+
+    const enriched = {
+      ...updated,
+      negocio_nombre: pedido.negocio_nombre,
+    };
+
+    if (pedido.cliente_id) {
+      notificarCliente(pedido.cliente_id, "pedido_update", enriched);
+      const eta = pedido.tiempo_estimado ? ` (${pedido.tiempo_estimado})` : "";
+      sendPushToUser(
+        sql,
+        pedido.cliente_id,
+        "🛵 ¡Tu pedido va en camino!",
+        `El repartidor recogió tu pedido en ${pedido.negocio_nombre || "el restaurante"} y va hacia tu ubicación${eta}.`,
+        { pedidoId: String(pedido.id), status: "en_camino" }
+      ).catch(() => {});
+    }
+    if (pedido.negocio_owner_id) {
+      notificarCliente(pedido.negocio_owner_id, "pedido_update", enriched);
+    }
+    if (pedido.repartidor_id) {
+      notificarCliente(pedido.repartidor_id, "pedido_update", enriched);
+    }
+
+    res.json({ ok: true, pedido: enriched });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/usuario/pedidos/:id/verificar-entrega — Repartidor verifica palabra clave del cliente al entregar el pedido
+router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
+  try {
+    const { palabra } = req.body;
+    if (!palabra) return res.status(400).json({ ok: false, error: "Palabra clave requerida" });
+
+    const rows = await sql`
+      SELECT p.*, COALESCE(v.owner_id, v.user_id) as negocio_owner_id, v.nombre as negocio_nombre
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id::text = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!rows.length) return res.status(404).json({ ok: false, error: "Pedido no encontrado" });
+    const pedido = rows[0];
+
+    if (String(pedido.codigo_entrega || "").trim().toUpperCase() !== String(palabra).trim().toUpperCase()) {
+      return res.json({ ok: false, error: "Palabra incorrecta. Verifica la clave con el cliente." });
+    }
+
+    const [updated] = await sql`
+      UPDATE pedidos
+      SET status = 'entregado',
+          entregado_en = NOW(),
+          actualizado_en = NOW()
+      WHERE id = ${pedido.id}
+      RETURNING *
+    `;
+
+    if (pedido.repartidor_id) {
+      try {
+        await sql`
+          UPDATE repartidores
+          SET entregas_count = COALESCE(entregas_count, 0) + 1,
+              total_entregas = COALESCE(total_entregas, 0) + 1
+          WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}
+        `;
+        const cfgRow = await sql`SELECT valor FROM app_config WHERE clave = 'comision_pct'`;
+        const comisionPct = cfgRow.length ? parseFloat(cfgRow[0].valor) / 100 : 0.18;
+        const comision = Math.round(Number(pedido.total || 0) * comisionPct * 100) / 100;
+        if (pedido.metodo_pago === "efectivo") {
+          await sql`UPDATE repartidores SET deuda_efectivo = COALESCE(deuda_efectivo, 0) + ${comision} WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}`;
+        } else if (pedido.metodo_pago === "tarjeta") {
+          await sql`UPDATE repartidores SET deuda_efectivo = GREATEST(0, COALESCE(deuda_efectivo, 0) - ${comision}) WHERE id = ${pedido.repartidor_id} OR usuario_id = ${pedido.repartidor_id}`;
+        }
+      } catch (e: any) {
+        logError(e, "verificar-entrega:repartidor");
+      }
+      notificarCliente(pedido.repartidor_id, "pedido_update", updated);
+    }
+
+    if (pedido.cliente_id) {
+      notificarCliente(pedido.cliente_id, "pedido_update", updated);
+      sendPushToUser(
+        sql,
+        pedido.cliente_id,
+        "🎉 ¡Pedido entregado!",
+        "¡Que lo disfrutes! No olvides calificar tu experiencia.",
+        { pedidoId: String(pedido.id), status: "entregado" }
+      ).catch(() => {});
+    }
+    if (pedido.negocio_owner_id) {
+      notificarCliente(pedido.negocio_owner_id, "pedido_update", updated);
+      sendPushToUser(
+        sql,
+        pedido.negocio_owner_id,
+        "✅ Pedido entregado al cliente",
+        `El pedido #${String(pedido.id).slice(-5).toUpperCase()} fue entregado con código verificado.`,
+        { pedidoId: String(pedido.id), status: "entregado" }
+      ).catch(() => {});
+    }
+
+    res.json({ ok: true, pedido: updated });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 
@@ -490,7 +690,7 @@ router.patch("/pedidos/:id/cancelar", requireAuthUsuario, async (req, res) => {
 
   try {
 
-    const rows = await sql`SELECT status, repartidor_id, cliente_id FROM pedidos WHERE id = ${req.params.id}`;
+    const rows = await sql`SELECT status, repartidor_id, cliente_id, negocio_id FROM pedidos WHERE id = ${req.params.id}`;
 
     if (!rows.length) return res.status(404).json({ error: "Pedido no encontrado" });
     if (rows[0].cliente_id !== (req as any).usrUserId) return res.status(403).json({ error: "Acceso denegado" });
@@ -501,10 +701,18 @@ router.patch("/pedidos/:id/cancelar", requireAuthUsuario, async (req, res) => {
 
       return res.status(400).json({ error: "No se puede cancelar en este punto" });
 
-    await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW() WHERE id = ${req.params.id}`;
+    const [updated] = await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW(), razon_cancelacion = 'Cancelado por el cliente' WHERE id = ${req.params.id} RETURNING *`;
 
     if (rows[0].repartidor_id) {
-      await sendPushToUser(sql, rows[0].repartidor_id, "Pedido cancelado", "El usuario cancelo el pedido", { tipo: "pedido_cancelado", pedido_id: req.params.id }).catch(() => {})
+      notificarCliente(rows[0].repartidor_id, "pedido_update", updated);
+      await sendPushToUser(sql, rows[0].repartidor_id, "Pedido cancelado", "El usuario canceló el pedido", { tipo: "pedido_cancelado", pedido_id: req.params.id }).catch(() => {})
+    }
+    if (rows[0].negocio_id) {
+      const neg = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${rows[0].negocio_id}`.catch(() => []);
+      if (neg[0]?.owner_id) {
+        notificarCliente(neg[0].owner_id, "pedido_update", updated);
+        await sendPushToUser(sql, neg[0].owner_id, "❌ Pedido cancelado por el cliente", "El cliente canceló su pedido.", { pedidoId: req.params.id, status: "cancelado" }).catch(() => {})
+      }
     }
     res.json({ ok: true });
 
@@ -639,7 +847,7 @@ router.patch("/perfil/:userId", requireAuthUsuario, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// DELETE /api/usuario/:userId — eliminar cuenta (soft delete, solo el propio usuario)
+// DELETE /api/usuario/:userId — eliminar cuenta por completo y liberar todo el almacenamiento (BD, Storage y Auth)
 router.delete("/:userId", requireAuth, async (req, res) => {
   const authId = (req as any).userId
   if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
@@ -647,9 +855,41 @@ router.delete("/:userId", requireAuth, async (req, res) => {
     const { userId } = req.params
     const activos = await sql`SELECT id FROM pedidos WHERE cliente_id = ${userId} AND status NOT IN ('entregado','cancelado','pago_fallido') LIMIT 1`
     if (activos.length) return res.status(400).json({ error: "Tienes pedidos activos. Espera a que finalicen antes de eliminar tu cuenta." })
-    await sql`DELETE FROM device_tokens WHERE user_id = ${userId}`
-    await sql`UPDATE usuarios SET eliminado_en = NOW(), email = '', nombre = 'Cuenta eliminada', foto_url = NULL WHERE id = ${userId}`
-    res.json({ ok: true })
+
+    // 1. Eliminar fotos y archivos del usuario en Supabase Storage para no gastar almacenamiento
+    const [usrRow] = await sql`SELECT foto_url, foto_perfil FROM usuarios WHERE id = ${userId}`.catch(() => [])
+    if (usrRow?.foto_url) await deleteSupabaseStorageFile(usrRow.foto_url).catch(() => {})
+    if (usrRow?.foto_perfil && usrRow.foto_perfil !== usrRow.foto_url) await deleteSupabaseStorageFile(usrRow.foto_perfil).catch(() => {})
+
+    const solicitudesRows = await sql`SELECT documentos FROM solicitudes WHERE usuario_id = ${userId}`.catch(() => [])
+    for (const sol of solicitudesRows) {
+      const docs = sol.documentos || {}
+      for (const val of Object.values(docs)) {
+        if (typeof val === "string" && val.startsWith("http")) {
+          await deleteSupabaseStorageFile(val).catch(() => {})
+        }
+      }
+    }
+
+    // 2. Eliminar todos los registros asociados del usuario en nuestras tablas
+    await sql`DELETE FROM device_tokens WHERE user_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM direcciones WHERE usuario_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM favoritos WHERE usuario_id = ${userId} OR cliente_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM notificaciones WHERE user_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM wallet_movimientos WHERE usuario_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM puntos_movimientos WHERE usuario_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM referidos WHERE referidor_id = ${userId} OR referido_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM mensajes WHERE emisor_id = ${userId} OR remitente_id = ${userId}`.catch(() => {})
+    await sql`DELETE FROM solicitudes WHERE usuario_id = ${userId}`.catch(() => {})
+
+    // 3. Anonimizar pedidos históricos concluidos para conservar contabilidad del restaurante/repartidor sin datos personales del cliente
+    await sql`UPDATE pedidos SET cliente_id = 'cuenta_eliminada', direccion_entrega = '', notas = '' WHERE cliente_id = ${userId}`.catch(() => {})
+
+    // 4. Eliminar definitivamente la fila de la tabla usuarios y la cuenta en Supabase Auth
+    await sql`DELETE FROM usuarios WHERE id = ${userId}`.catch(() => {})
+    await supabase.auth.admin.deleteUser(userId).catch(() => {})
+
+    res.json({ ok: true, deleted: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 

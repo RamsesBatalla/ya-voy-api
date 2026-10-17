@@ -57,15 +57,18 @@ router.get("/saldo/:tipo/:actorId", requireAuth, async (req, res) => {
 
     if (tipo === "repartidor") {
       const rows = await sql`
-        SELECT COALESCE(SUM(COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 35})), 0) as total
+        SELECT COALESCE(SUM(COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 25}) + COALESCE(propina, 0)), 0) as total
         FROM pedidos WHERE repartidor_id = ${actorId} AND status = 'entregado'`
-      ganado = Number(rows[0]?.total || 0)
+      const [repRow] = await sql`SELECT COALESCE(deuda_efectivo, 0) as deuda FROM repartidores WHERE id = ${actorId} OR usuario_id = ${actorId} LIMIT 1`.catch(() => [{ deuda: 0 }])
+      ganado = Math.max(0, Number(rows[0]?.total || 0) - Number(repRow?.deuda || 0))
     } else if (tipo === "restaurante") {
-      const negocio = await sql`SELECT id FROM viveres WHERE owner_id = ${actorId}`
+      const negocio = await sql`SELECT id FROM viveres WHERE owner_id = ${actorId} OR id::text = ${actorId} LIMIT 1`
       if (negocio.length) {
         const rows = await sql`
-          SELECT COALESCE(SUM((total - COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 35})) * ${1 - comisionPct}), 0) as total
-          FROM pedidos WHERE negocio_id = ${negocio[0].id} AND status = 'entregado'`
+          SELECT COALESCE(SUM((total - COALESCE(costo_envio, ${cfgMap.envio_minimo ?? 25}) - COALESCE(propina, 0)) * ${1 - comisionPct}), 0) as total
+          FROM pedidos
+          WHERE negocio_id = ${negocio[0].id}
+            AND (status = 'entregado' OR (status = 'cancelado' AND compensar_restaurante = true))`
         ganado = Number(rows[0]?.total || 0)
       }
     }

@@ -40,6 +40,9 @@ export async function runMigrations() {
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0`;
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS puntos INT DEFAULT 0`;
     await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS referral_code TEXT`;
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto_perfil TEXT`;
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 0.0`;
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS eliminado_en TIMESTAMPTZ`;
     await sql`ALTER TABLE usuarios ALTER COLUMN email DROP NOT NULL`.catch(() => {});
 
     // 2. Tabla de Solicitudes (Restaurantes y Repartidores)
@@ -66,6 +69,7 @@ export async function runMigrations() {
       CREATE TABLE IF NOT EXISTS viveres (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         owner_id TEXT NOT NULL,
+        user_id TEXT,
         nombre TEXT NOT NULL,
         descripcion TEXT,
         categoria TEXT DEFAULT 'Restaurante',
@@ -108,6 +112,7 @@ export async function runMigrations() {
       );
     `;
     await sql`ALTER TABLE viveres ALTER COLUMN calificacion SET DEFAULT 0.0`.catch(() => {});
+    await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS user_id TEXT`;
     await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'Restaurante'`;
     await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`;
     await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`;
@@ -137,6 +142,7 @@ export async function runMigrations() {
     await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS incidentes_count INT DEFAULT 0`;
     await sql`ALTER TABLE viveres ADD COLUMN IF NOT EXISTS suspendido BOOLEAN DEFAULT false`;
     // Sincronizar lat/lng con latitud/longitud si alguno está vacío
+    await sql`UPDATE viveres SET user_id = owner_id WHERE user_id IS NULL AND owner_id IS NOT NULL`.catch(() => {});
     await sql`UPDATE viveres SET lat = latitud WHERE lat IS NULL AND latitud IS NOT NULL`.catch(() => {});
     await sql`UPDATE viveres SET lng = longitud WHERE lng IS NULL AND longitud IS NOT NULL`.catch(() => {});
     await sql`UPDATE viveres SET latitud = lat WHERE latitud IS NULL AND lat IS NOT NULL`.catch(() => {});
@@ -151,24 +157,33 @@ export async function runMigrations() {
       CREATE TABLE IF NOT EXISTS repartidores (
         id TEXT PRIMARY KEY,
         usuario_id TEXT,
+        user_id TEXT,
         nombre TEXT NOT NULL DEFAULT 'Repartidor',
         email TEXT,
         telefono TEXT,
         foto_url TEXT,
         vehiculo_tipo TEXT DEFAULT 'moto',
+        vehiculo TEXT DEFAULT 'moto',
         vehiculo_modelo TEXT,
         vehiculo_placas TEXT,
         placas TEXT,
+        placa TEXT,
+        status TEXT DEFAULT 'offline',
         disponible BOOLEAN DEFAULT false,
         en_linea BOOLEAN DEFAULT false,
         activo BOOLEAN DEFAULT true,
+        verificado BOOLEAN DEFAULT true,
         latitud DOUBLE PRECISION,
         longitud DOUBLE PRECISION,
         lat DOUBLE PRECISION,
         lng DOUBLE PRECISION,
+        lat_actual DOUBLE PRECISION,
+        lng_actual DOUBLE PRECISION,
         calificacion NUMERIC DEFAULT 0.0,
         rating NUMERIC DEFAULT 0.0,
         total_entregas INTEGER DEFAULT 0,
+        entregas_count INTEGER DEFAULT 0,
+        deuda_efectivo NUMERIC DEFAULT 0,
         stripe_account_id TEXT,
         clabe_bancaria TEXT,
         banco_nombre TEXT,
@@ -180,22 +195,35 @@ export async function runMigrations() {
     `;
     await sql`ALTER TABLE repartidores ALTER COLUMN usuario_id DROP NOT NULL`.catch(() => {});
     await sql`ALTER TABLE repartidores ALTER COLUMN calificacion SET DEFAULT 0.0`.catch(() => {});
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS user_id TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS email TEXT`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS vehiculo TEXT DEFAULT 'moto'`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS vehiculo_modelo TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS vehiculo_placas TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS placas TEXT`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS placa TEXT`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'offline'`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS disponible BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS en_linea BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT true`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS verificado BOOLEAN DEFAULT true`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lat_actual DOUBLE PRECISION`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS lng_actual DOUBLE PRECISION`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 0.0`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS entregas_count INTEGER DEFAULT 0`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS deuda_efectivo NUMERIC DEFAULT 0`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS stripe_account_id TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS clabe_bancaria TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS banco_nombre TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS titular_cuenta TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS razon_bloqueo TEXT`;
+    await sql`UPDATE repartidores SET user_id = COALESCE(usuario_id, id) WHERE user_id IS NULL`.catch(() => {});
+    await sql`UPDATE repartidores SET vehiculo = vehiculo_tipo WHERE vehiculo IS NULL AND vehiculo_tipo IS NOT NULL`.catch(() => {});
+    await sql`UPDATE repartidores SET placa = COALESCE(vehiculo_placas, placas) WHERE placa IS NULL`.catch(() => {});
+    await sql`UPDATE repartidores SET status = 'online' WHERE en_linea = true AND (status IS NULL OR status = 'offline')`.catch(() => {});
     await sql`UPDATE repartidores SET calificacion = 0.0 WHERE calificacion = 5.0 AND COALESCE(total_entregas, 0) = 0`.catch(() => {});
     await sql`UPDATE repartidores SET rating = 0.0 WHERE rating = 5.0 AND COALESCE(total_entregas, 0) = 0`.catch(() => {});
 
@@ -237,6 +265,9 @@ export async function runMigrations() {
         cupon_codigo TEXT,
         monto_total NUMERIC DEFAULT 0,
         metodo_pago TEXT DEFAULT 'efectivo',
+        payment_intent_id TEXT,
+        tipo_entrega TEXT DEFAULT 'inmediato',
+        programado_para TIMESTAMPTZ,
         notas TEXT DEFAULT '',
         direccion_entrega TEXT,
         lat_entrega DOUBLE PRECISION,
@@ -247,19 +278,29 @@ export async function runMigrations() {
         codigo_entrega TEXT,
         codigo_restaurante TEXT,
         palabras_verificacion JSONB,
+        verificado_restaurante BOOLEAN DEFAULT false,
+        recolectado_en TIMESTAMPTZ,
+        asignado_en TIMESTAMPTZ,
+        compensar_restaurante BOOLEAN DEFAULT false,
         tiempo_estimado TEXT DEFAULT '30-45 min',
+        tiempo_estimado_min INT,
         distancia_km NUMERIC,
         foto_entrega_url TEXT,
+        foto_entrega TEXT,
         foto_entrega_expira TIMESTAMPTZ,
         esperando_desde TIMESTAMPTZ,
         entregado_en TIMESTAMPTZ,
         cancelado_en TIMESTAMPTZ,
         razon_cancelacion TEXT,
         rating_negocio NUMERIC,
+        rating_restaurante NUMERIC,
         rating_repartidor NUMERIC,
+        rating_cliente NUMERIC,
         comentario_rating TEXT,
         aspectos_negocio TEXT[],
-        aspectos_repartidor TEXT[],
+        aspectos_restaurante JSONB DEFAULT '[]'::jsonb,
+        aspectos_repartidor JSONB DEFAULT '[]'::jsonb,
+        aspectos_cliente JSONB DEFAULT '[]'::jsonb,
         creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
@@ -277,6 +318,9 @@ export async function runMigrations() {
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS descuento NUMERIC DEFAULT 0`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cupon_codigo TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS metodo_pago TEXT DEFAULT 'efectivo'`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS payment_intent_id TEXT`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'inmediato'`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS programado_para TIMESTAMPTZ`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS notas TEXT DEFAULT ''`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS direccion_entrega TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS lat_entrega DOUBLE PRECISION`;
@@ -287,19 +331,29 @@ export async function runMigrations() {
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS codigo_entrega TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS codigo_restaurante TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS palabras_verificacion JSONB`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS verificado_restaurante BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS recolectado_en TIMESTAMPTZ`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS asignado_en TIMESTAMPTZ`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS compensar_restaurante BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tiempo_estimado TEXT DEFAULT '30-45 min'`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tiempo_estimado_min INT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS distancia_km NUMERIC`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS foto_entrega_url TEXT`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS foto_entrega TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS foto_entrega_expira TIMESTAMPTZ`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS esperando_desde TIMESTAMPTZ`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregado_en TIMESTAMPTZ`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cancelado_en TIMESTAMPTZ`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS razon_cancelacion TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_negocio NUMERIC`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_restaurante NUMERIC`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_repartidor NUMERIC`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS rating_cliente NUMERIC`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS comentario_rating TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_negocio TEXT[]`;
-    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_repartidor TEXT[]`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_restaurante JSONB DEFAULT '[]'::jsonb`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_repartidor JSONB DEFAULT '[]'::jsonb`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS aspectos_cliente JSONB DEFAULT '[]'::jsonb`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
     await sql`UPDATE pedidos SET total = monto_total WHERE (total IS NULL OR total = 0) AND monto_total IS NOT NULL AND monto_total > 0`.catch(() => {});
     await sql`UPDATE pedidos SET monto_total = total WHERE (monto_total IS NULL OR monto_total = 0) AND total IS NOT NULL AND total > 0`.catch(() => {});
@@ -401,11 +455,13 @@ export async function runMigrations() {
         ('comision_pct', '18'),
         ('fondo_pct', '20'),
         ('retiro_minimo', '50'),
-        ('radio_max_usuario_km', '25'),
-        ('radio_max_repartidor_km', '15'),
+        ('radio_max_usuario_km', '10'),
+        ('radio_max_repartidor_km', '10'),
         ('mantenimiento', 'false')
       ON CONFLICT (clave) DO NOTHING
     `.catch(() => {});
+    await sql`UPDATE app_config SET valor = '10' WHERE clave = 'radio_max_usuario_km' AND valor = '25'`.catch(() => {});
+    await sql`UPDATE app_config SET valor = '10' WHERE clave = 'radio_max_repartidor_km' AND valor = '15'`.catch(() => {});
 
     // 13. Tablas de Cupones, Wallet, Puntos, Referidos y Notificaciones
     await sql`

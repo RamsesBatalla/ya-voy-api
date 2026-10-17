@@ -12,15 +12,23 @@ const STRIPE_TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY || process.env.STRIPE
 const stripeTest = new Stripe(STRIPE_TEST_KEY, { apiVersion: "2026-04-22.dahlia" })
 
 const getConfig = async () => {
-  const rows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','fondo_pct','envio_precio_km','envio_minimo')`
+  const rows = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('comision_pct','fondo_pct','envio_precio_km','envio_por_km','envio_minimo')`
   const cfg: Record<string,number> = {}
   rows.forEach((r: any) => { cfg[r.clave] = parseFloat(r.valor) })
   return {
     comisionPct: (cfg.comision_pct ?? 18) / 100,
     fondoPct:    (cfg.fondo_pct    ?? 20) / 100,
-    precioPorKm: cfg.envio_precio_km ?? 8,
+    precioPorKm: cfg.envio_por_km ?? cfg.envio_precio_km ?? 8,
     envioMinimo: cfg.envio_minimo    ?? 25,
   }
+}
+
+function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 // ─── CALCULAR COSTO ENVIO ─────────────────────────────────────────────────
@@ -30,13 +38,20 @@ router.post("/calcular-envio", async (req, res) => {
     if (!latUsuario || !lngUsuario || !latNegocio || !lngNegocio)
       return res.status(400).json({ error: "Coordenadas requeridas" })
 
-    const url = "http://router.project-osrm.org/route/v1/driving/" +
-      lngNegocio + "," + latNegocio + ";" + lngUsuario + "," + latUsuario +
-      "?overview=false"
-
-    const r = await fetch(url)
-    const data: any = await r.json()
-    const distanciaKm = (data.routes?.[0]?.distance ?? 0) / 1000
+    let distanciaKm = 0
+    try {
+      const url = "https://router.project-osrm.org/route/v1/driving/" +
+        lngNegocio + "," + latNegocio + ";" + lngUsuario + "," + latUsuario +
+        "?overview=false"
+      const r = await fetch(url, { signal: AbortSignal.timeout(3500) })
+      const data: any = await r.json()
+      distanciaKm = (data.routes?.[0]?.distance ?? 0) / 1000
+    } catch {
+      distanciaKm = 0
+    }
+    if (!distanciaKm || distanciaKm <= 0) {
+      distanciaKm = calcHaversineKm(Number(latNegocio), Number(lngNegocio), Number(latUsuario), Number(lngUsuario)) * 1.25
+    }
 
     const cfg = await getConfig()
     const costoEnvio = Math.max(cfg.envioMinimo, Math.round(distanciaKm * cfg.precioPorKm))
@@ -50,7 +65,7 @@ router.post("/calcular-envio", async (req, res) => {
 // ─── PAYMENT INTENT ────────────────────────────────────────────────────────
 router.post("/payment-intent", requireAuth, async (req, res) => {
   try {
-    const { userId: authUserId } = (req as any).auth ?? {}
+    const authUserId = (req as any).userId || (req as any).auth?.userId || ""
     const { amount, currency = "mxn", negocioId, repartidorId, costoEnvio, metadata = {} } = req.body
     if (!amount || amount < 10) return res.status(400).json({ error: "Monto invalido" })
 
@@ -63,7 +78,7 @@ router.post("/payment-intent", requireAuth, async (req, res) => {
     let applicationFee: number | undefined = undefined
 
     if (negocioId) {
-      const negocios = await sql`SELECT stripe_account_id FROM viveres WHERE id = ${negocioId}`
+      const negocios = await sql`SELECT stripe_account_id FROM viveres WHERE id::text = ${negocioId}`
       const negocio = negocios[0]
       if (negocio?.stripe_account_id) {
         applicationFee = comisionCentavos
@@ -110,10 +125,10 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
 
     let existingAccountId: string | null = null
     if (tipo === "restaurante") {
-      const rows = await sql`SELECT stripe_account_id FROM viveres WHERE id = ${actorId}`
+      const rows = await sql`SELECT stripe_account_id FROM viveres WHERE id::text = ${actorId} OR owner_id = ${actorId} LIMIT 1`
       existingAccountId = rows[0]?.stripe_account_id || null
     } else if (tipo === "repartidor") {
-      const rows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${actorId}`
+      const rows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${actorId} OR usuario_id = ${actorId} LIMIT 1`
       existingAccountId = rows[0]?.stripe_account_id || null
     }
 
@@ -160,9 +175,9 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
 
     if (accountId) {
       if (tipo === "restaurante") {
-        await sql`UPDATE viveres SET stripe_account_id = ${accountId} WHERE id = ${actorId}`
+        await sql`UPDATE viveres SET stripe_account_id = ${accountId} WHERE id::text = ${actorId} OR owner_id = ${actorId}`
       } else {
-        await sql`UPDATE repartidores SET stripe_account_id = ${accountId} WHERE id = ${actorId}`
+        await sql`UPDATE repartidores SET stripe_account_id = ${accountId} WHERE id = ${actorId} OR usuario_id = ${actorId}`
       }
     }
 
@@ -170,7 +185,6 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
-// ─── STATUS CONNECT ────────────────────────────────────────────────────────
 // ─── VALIDAR CLABE BANXICO ──────────────────────────────────────────────────
 export function validarClabeBanxico(clabe: string): boolean {
   if (!/^\d{18}$/.test(clabe)) return false;
@@ -196,7 +210,7 @@ router.get("/connect/status/:tipo/:actorId", async (req, res) => {
       const rows = await sql`
         SELECT stripe_account_id, clabe_bancaria, banco_nombre, titular_cuenta 
         FROM viveres 
-        WHERE id = ${actorId} OR owner_id = ${actorId}
+        WHERE id::text = ${actorId} OR owner_id = ${actorId}
         LIMIT 1
       `
       accountId = rows[0]?.stripe_account_id || null
@@ -207,7 +221,7 @@ router.get("/connect/status/:tipo/:actorId", async (req, res) => {
       const rows = await sql`
         SELECT stripe_account_id, clabe_bancaria, banco_nombre, titular_cuenta 
         FROM repartidores 
-        WHERE id = ${actorId} OR user_id = ${actorId}
+        WHERE id = ${actorId} OR usuario_id = ${actorId} OR user_id = ${actorId}
         LIMIT 1
       `
       accountId = rows[0]?.stripe_account_id || null
@@ -273,7 +287,7 @@ router.post("/connect/clabe", requireAuth, async (req, res) => {
           clabe_bancaria = ${clabeClean},
           banco_nombre = ${banco || ""},
           titular_cuenta = ${titular || ""}
-        WHERE id = ${actorId} OR owner_id = ${actorId}
+        WHERE id::text = ${actorId} OR owner_id = ${actorId}
       `
     } else {
       await sql`
@@ -281,7 +295,7 @@ router.post("/connect/clabe", requireAuth, async (req, res) => {
           clabe_bancaria = ${clabeClean},
           banco_nombre = ${banco || ""},
           titular_cuenta = ${titular || ""}
-        WHERE id = ${actorId} OR user_id = ${actorId}
+        WHERE id = ${actorId} OR usuario_id = ${actorId} OR user_id = ${actorId}
       `
     }
     res.json({ 
