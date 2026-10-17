@@ -1,6 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { sql, supabase, deleteSupabaseStorageFile } from "../db";
+import { sql, supabase } from "../db";
+import { deleteSupabaseStorageFile } from "../services/solicitudesService";
 import { sendPushToUser } from "../firebase";
 import { notificarCliente } from "../websocket";
 import { requireAuth, requireAuthUsuario } from "../middleware/auth";
