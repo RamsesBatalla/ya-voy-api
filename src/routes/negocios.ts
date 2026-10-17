@@ -93,5 +93,24 @@ router.get('/negocio/:userId', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+router.get('/detalle/:negocioId', async (req, res) => {
+  try {
+    const rows = await sql`
+      SELECT * FROM viveres WHERE id = ${req.params.negocioId} LIMIT 1
+    `;
+    const neg = rows[0];
+    if (!neg) return res.status(404).json({ error: 'Negocio no encontrado' });
+    const sync = await sincronizarEstadoNegocio(neg);
+    res.json({
+      ...neg,
+      esta_abierto: sync.esta_abierto,
+      cierre_manual_hoy: sync.cierre_manual_hoy,
+      lat: neg.lat ?? neg.latitud ?? null,
+      lng: neg.lng ?? neg.longitud ?? null,
+      imagen_url: neg.imagen_url ?? neg.logo_url ?? null,
+    });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;
 
