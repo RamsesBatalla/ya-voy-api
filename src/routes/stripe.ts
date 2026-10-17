@@ -171,24 +171,61 @@ router.post("/connect/onboarding", requireAuth, async (req, res) => {
 })
 
 // ─── STATUS CONNECT ────────────────────────────────────────────────────────
+// ─── VALIDAR CLABE BANXICO ──────────────────────────────────────────────────
+export function validarClabeBanxico(clabe: string): boolean {
+  if (!/^\d{18}$/.test(clabe)) return false;
+  const weights = [3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7, 1, 3, 7];
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    sum += (parseInt(clabe[i], 10) * weights[i]) % 10;
+  }
+  const control = (10 - (sum % 10)) % 10;
+  return control === parseInt(clabe[17], 10);
+}
+
+// ─── STATUS CONNECT ────────────────────────────────────────────────────────
 router.get("/connect/status/:tipo/:actorId", async (req, res) => {
   try {
     const { tipo, actorId } = req.params
     let accountId: string | null = null
     let clabe: string | null = null
+    let banco: string | null = null
+    let titular: string | null = null
 
     if (tipo === "restaurante") {
-      const rows = await sql`SELECT stripe_account_id, clabe_bancaria FROM viveres WHERE id = ${actorId}`
+      const rows = await sql`
+        SELECT stripe_account_id, clabe_bancaria, banco_nombre, titular_cuenta 
+        FROM viveres 
+        WHERE id = ${actorId} OR owner_id = ${actorId}
+        LIMIT 1
+      `
       accountId = rows[0]?.stripe_account_id || null
       clabe = rows[0]?.clabe_bancaria || null
+      banco = rows[0]?.banco_nombre || null
+      titular = rows[0]?.titular_cuenta || null
     } else if (tipo === "repartidor") {
-      const rows = await sql`SELECT stripe_account_id, clabe_bancaria FROM repartidores WHERE id = ${actorId}`
+      const rows = await sql`
+        SELECT stripe_account_id, clabe_bancaria, banco_nombre, titular_cuenta 
+        FROM repartidores 
+        WHERE id = ${actorId} OR user_id = ${actorId}
+        LIMIT 1
+      `
       accountId = rows[0]?.stripe_account_id || null
       clabe = rows[0]?.clabe_bancaria || null
+      banco = rows[0]?.banco_nombre || null
+      titular = rows[0]?.titular_cuenta || null
     }
 
     if (!accountId) {
-      return res.json({ conectado: Boolean(clabe), accountId: null, tieneClabe: Boolean(clabe) })
+      return res.json({
+        conectado: Boolean(clabe),
+        accountId: null,
+        tieneClabe: Boolean(clabe),
+        clabe: clabe ? `•••• ${clabe.slice(-4)}` : null,
+        clabeCompleta: clabe,
+        banco,
+        titular,
+      })
     }
 
     let account: any = null
@@ -207,6 +244,10 @@ router.get("/connect/status/:tipo/:actorId", async (req, res) => {
       chargesEnabled: account?.charges_enabled ?? false,
       payoutsEnabled: account?.payouts_enabled ?? false,
       tieneClabe: Boolean(clabe),
+      clabe: clabe ? `•••• ${clabe.slice(-4)}` : null,
+      clabeCompleta: clabe,
+      banco,
+      titular,
     })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -216,26 +257,40 @@ router.post("/connect/clabe", requireAuth, async (req, res) => {
   try {
     const { tipo, actorId, clabe, banco, titular } = req.body
     if (!tipo || !actorId || !clabe) return res.status(400).json({ error: "tipo, actorId y clabe requeridos" })
-    if (clabe.length !== 18) return res.status(400).json({ error: "La CLABE interbancaria debe tener exactamente 18 dígitos" })
+    
+    const clabeClean = String(clabe).trim().replace(/\D/g, "")
+    if (clabeClean.length !== 18) {
+      return res.status(400).json({ error: "La CLABE interbancaria debe tener exactamente 18 dígitos numéricos" })
+    }
+
+    if (!validarClabeBanxico(clabeClean)) {
+      return res.status(400).json({ error: "El dígito de control de la CLABE es inválido. Verifica los 18 dígitos según tu banco." })
+    }
 
     if (tipo === "restaurante") {
       await sql`
         UPDATE viveres SET
-          clabe_bancaria = ${clabe},
+          clabe_bancaria = ${clabeClean},
           banco_nombre = ${banco || ""},
           titular_cuenta = ${titular || ""}
-        WHERE id = ${actorId}
+        WHERE id = ${actorId} OR owner_id = ${actorId}
       `
     } else {
       await sql`
         UPDATE repartidores SET
-          clabe_bancaria = ${clabe},
+          clabe_bancaria = ${clabeClean},
           banco_nombre = ${banco || ""},
           titular_cuenta = ${titular || ""}
-        WHERE id = ${actorId}
+        WHERE id = ${actorId} OR user_id = ${actorId}
       `
     }
-    res.json({ ok: true, conectado: true })
+    res.json({ 
+      ok: true, 
+      conectado: true,
+      clabe: `•••• ${clabeClean.slice(-4)}`,
+      banco: banco || "",
+      titular: titular || ""
+    })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -369,13 +424,24 @@ router.post("/customer", requireAuth, async (req, res) => {
 
 router.post("/setup-intent", requireAuth, async (req, res) => {
   try {
-    const { userId } = req.body
+    const { userId, email, nombre } = req.body
     if (!userId) return res.status(400).json({ error: "userId requerido" })
-    const rows = await sql`SELECT stripe_customer_id FROM usuarios WHERE id = ${userId}`
-    const customerId = rows[0]?.stripe_customer_id
-    if (!customerId) return res.status(400).json({ error: "Customer no encontrado" })
+    await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`
+    const rows = await sql`SELECT id, email, nombre, stripe_customer_id FROM usuarios WHERE id = ${userId}`
+    let customerId = rows[0]?.stripe_customer_id
+    if (!customerId) {
+      const userEmail = email || rows[0]?.email || undefined
+      const userName = nombre || rows[0]?.nombre || undefined
+      const customer = await stripe.customers.create({ email: userEmail, name: userName, metadata: { userId } })
+      customerId = customer.id
+      await sql`
+        INSERT INTO usuarios (id, email, nombre, stripe_customer_id)
+        VALUES (${userId}, ${userEmail || ''}, ${userName || ''}, ${customerId})
+        ON CONFLICT (id) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id
+      `
+    }
     const setupIntent = await stripe.setupIntents.create({ customer: customerId, payment_method_types: ["card"] })
-    res.json({ clientSecret: setupIntent.client_secret })
+    res.json({ clientSecret: setupIntent.client_secret, customerId })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 

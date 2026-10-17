@@ -192,18 +192,15 @@ export async function sincronizarEstadoNegocio(negocio: any, mx: MexicoNow = get
   }
 
   // Caso 3: Si tiene horarios configurados, el horario del día determina si está abierto
-  // (a menos que haya abierto manualmente hoy fuera de horario)
   if (evalH.tieneHorarioConfigurado) {
-    let abiertoFinal = evalH.abiertoPorHorario;
-    if (!abiertoFinal && aperturaManualFecha === mx.fechaStr && negocio.esta_abierto === true) {
-      abiertoFinal = true;
-    }
+    const abiertoFinal = evalH.abiertoPorHorario;
 
     if ((cierreExpirado || negocio.esta_abierto !== abiertoFinal) && negocio.id) {
       await sql`
         UPDATE viveres
         SET esta_abierto = ${abiertoFinal},
-            cierre_manual_fecha = NULL
+            cierre_manual_fecha = ${cierreExpirado ? null : sql`cierre_manual_fecha`},
+            apertura_manual_fecha = ${!abiertoFinal ? null : sql`apertura_manual_fecha`}
         WHERE id = ${negocio.id}
       `.catch(() => {});
     }
