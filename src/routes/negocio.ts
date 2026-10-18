@@ -30,8 +30,8 @@ router.patch('/:id/toggle', requireAuth, requireNegocioOwner, async (req, res) =
   }
 });
 
-// Editar datos del negocio (incluyendo dirección exacta y coordenadas para envío)
-router.put('/:id', requireAuth, requireNegocioOwner, async (req, res) => {
+// Editar datos del negocio (incluyendo dirección exacta y coordenadas para cálculo de distancias)
+const updateNegocioPerfil = async (req: any, res: any) => {
   try {
     const {
       nombre,
@@ -46,12 +46,18 @@ router.put('/:id', requireAuth, requireNegocioOwner, async (req, res) => {
       referencias,
       imagen_url,
       banner_url,
+      tipo,
+      categoria,
       lat,
       lng,
+      latitud,
+      longitud,
     } = req.body;
 
-    const latNum = lat != null && lat !== '' ? Number(lat) : null;
-    const lngNum = lng != null && lng !== '' ? Number(lng) : null;
+    const rawLat = lat ?? latitud;
+    const rawLng = lng ?? longitud;
+    const latNum = rawLat != null && rawLat !== '' ? Number(rawLat) : null;
+    const lngNum = rawLng != null && rawLng !== '' ? Number(rawLng) : null;
 
     const rows = await sql`
       UPDATE viveres SET
@@ -68,6 +74,8 @@ router.put('/:id', requireAuth, requireNegocioOwner, async (req, res) => {
         imagen_url    = COALESCE(${imagen_url ?? null}, imagen_url),
         logo_url      = COALESCE(${imagen_url ?? null}, logo_url),
         banner_url    = COALESCE(${banner_url ?? null}, banner_url),
+        tipo          = COALESCE(${tipo ?? null}, tipo),
+        categoria     = COALESCE(${categoria ?? null}, categoria),
         lat           = COALESCE(${latNum}, lat),
         latitud       = COALESCE(${latNum}, latitud),
         lng           = COALESCE(${lngNum}, lng),
@@ -75,11 +83,16 @@ router.put('/:id', requireAuth, requireNegocioOwner, async (req, res) => {
       WHERE id = ${req.params.id}
       RETURNING *
     `;
+    if (!rows.length) return res.status(404).json({ error: 'Negocio no encontrado' });
     res.json(rows[0]);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
-});
+};
+
+router.put('/:id', requireAuth, requireNegocioOwner, updateNegocioPerfil);
+router.patch('/:id', requireAuth, requireNegocioOwner, updateNegocioPerfil);
+router.patch('/:id/perfil', requireAuth, requireNegocioOwner, updateNegocioPerfil);
 
 // Guardar horarios y sincronizar inmediatamente el estado de apertura
 router.patch('/:id/horarios', requireAuth, requireNegocioOwner, async (req, res) => {
