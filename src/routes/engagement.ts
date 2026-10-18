@@ -44,7 +44,7 @@ router.get("/wallet/recompensa-video/status/:userId", requireAuthUsuario, async 
         AND concepto LIKE 'Recompensa por video%' 
         AND creado_en >= CURRENT_DATE
     `
-    res.json({ videosHoy: Number(rows?.count || 0), maxVideos: 5, recompensaPorVideo: 0.25 })
+    res.json({ videosHoy: Number(rows?.count || 0), maxVideos: 10, recompensaPorVideo: 0.25 })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -59,8 +59,8 @@ router.post("/wallet/recompensa-video", requireAuthUsuario, async (req, res) => 
         AND creado_en >= CURRENT_DATE
     `
     const videosHoy = Number(check?.count || 0)
-    if (videosHoy >= 5) {
-      return res.status(400).json({ error: "Has alcanzado el límite de 5 videos por hoy. ¡Vuelve mañana!" })
+    if (videosHoy >= 10) {
+      return res.status(400).json({ error: "Has alcanzado el límite de 10 videos por hoy. ¡Vuelve mañana!" })
     }
 
     const recompensa = 0.25 // $0.25 MXN por video visto
@@ -74,7 +74,7 @@ router.post("/wallet/recompensa-video", requireAuthUsuario, async (req, res) => 
       montoAcreditado: recompensa, 
       nuevoBalance: Number(user?.wallet_balance || 0), 
       videosHoy: videosHoy + 1, 
-      maxVideos: 5 
+      maxVideos: 10 
     })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
