@@ -33,6 +33,52 @@ router.post("/wallet/acreditar", requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+// GET /api/usuario/wallet/recompensa-video/status/:userId
+router.get("/wallet/recompensa-video/status/:userId", requireAuthUsuario, async (req, res) => {
+  const authId = (req as any).usrUserId
+  if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
+  try {
+    const [rows] = await sql`
+      SELECT COUNT(*)::int as count FROM wallet_movimientos 
+      WHERE usuario_id = ${authId} 
+        AND concepto LIKE 'Recompensa por video%' 
+        AND creado_en >= CURRENT_DATE
+    `
+    res.json({ videosHoy: Number(rows?.count || 0), maxVideos: 5, recompensaPorVideo: 0.25 })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/usuario/wallet/recompensa-video
+router.post("/wallet/recompensa-video", requireAuthUsuario, async (req, res) => {
+  const authId = (req as any).usrUserId
+  try {
+    const [check] = await sql`
+      SELECT COUNT(*)::int as count FROM wallet_movimientos 
+      WHERE usuario_id = ${authId} 
+        AND concepto LIKE 'Recompensa por video%' 
+        AND creado_en >= CURRENT_DATE
+    `
+    const videosHoy = Number(check?.count || 0)
+    if (videosHoy >= 5) {
+      return res.status(400).json({ error: "Has alcanzado el límite de 5 videos por hoy. ¡Vuelve mañana!" })
+    }
+
+    const recompensa = 0.25 // $0.25 MXN por video visto
+    await sql`UPDATE usuarios SET wallet_balance = COALESCE(wallet_balance, 0) + ${recompensa} WHERE id = ${authId}`
+    await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto)
+      VALUES (${authId}, 'credito', ${recompensa}, 'Recompensa por video publicitario')`
+
+    const [user] = await sql`SELECT wallet_balance FROM usuarios WHERE id = ${authId}`
+    res.json({ 
+      ok: true, 
+      montoAcreditado: recompensa, 
+      nuevoBalance: Number(user?.wallet_balance || 0), 
+      videosHoy: videosHoy + 1, 
+      maxVideos: 5 
+    })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 // ─── PUNTOS ───────────────────────────────────────────────────────────────────
 
 // GET /api/usuario/puntos/:userId
