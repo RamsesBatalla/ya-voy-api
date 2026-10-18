@@ -424,13 +424,43 @@ router.get("/:userId/ubicacion", async (req, res) => {
     res.json(rows[0] || { lat_actual: null, lng_actual: null })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
-// GET /api/repartidores/disponibles/count
-router.get("/disponibles/count", async (_req, res) => {
+// GET /api/repartidor/disponibles/count (con cálculo de proximidad real)
+router.get("/disponibles/count", async (req, res) => {
   try {
-    const rows = await sql`SELECT COUNT(*) as total, array_agg(COALESCE(u.nombre, r.nombre)) as nombres FROM repartidores r LEFT JOIN usuarios u ON u.id = r.id WHERE r.status = 'online' OR r.en_linea = true`
-    res.json({ total: Number(rows[0].total), nombres: rows[0].nombres || [] })
-  } catch (e: any) { res.status(500).json({ error: e.message }) }
-})
+    let targetLat = req.query.lat != null && req.query.lat !== "" ? Number(req.query.lat) : null;
+    let targetLng = req.query.lng != null && req.query.lng !== "" ? Number(req.query.lng) : null;
+
+    if ((targetLat == null || targetLng == null) && req.query.negocioId) {
+      const negRows = await sql`SELECT COALESCE(lat, latitud) as lat, COALESCE(lng, longitud) as lng FROM viveres WHERE id::text = ${String(req.query.negocioId)} LIMIT 1`.catch(() => []);
+      if (negRows.length && negRows[0].lat != null && negRows[0].lng != null) {
+        targetLat = Number(negRows[0].lat);
+        targetLng = Number(negRows[0].lng);
+      }
+    }
+
+    const rows = await sql`
+      SELECT r.id, COALESCE(u.nombre, r.nombre) as nombre,
+             COALESCE(r.lat_actual, r.latitud, r.lat) as lat,
+             COALESCE(r.lng_actual, r.longitud, r.lng) as lng
+      FROM repartidores r
+      LEFT JOIN usuarios u ON u.id = r.id
+      WHERE (r.status = 'online' OR r.en_linea = true)
+        AND COALESCE(r.bloqueado, false) = false
+    `;
+
+    if (targetLat != null && targetLng != null && !isNaN(targetLat) && !isNaN(targetLng) && targetLat !== 0 && targetLng !== 0) {
+      const radioMaxKm = 10;
+      const cercanos = rows.filter((r: any) => {
+        if (r.lat == null || r.lng == null) return false;
+        const d = calcHaversineKm(targetLat!, targetLng!, Number(r.lat), Number(r.lng));
+        return d <= radioMaxKm;
+      });
+      return res.json({ total: cercanos.length, nombres: cercanos.map((r: any) => r.nombre).filter(Boolean) });
+    }
+
+    res.json({ total: rows.length, nombres: rows.map((r: any) => r.nombre).filter(Boolean) });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 // GET /api/repartidor/:repartidorId/calificaciones-aspectos — desglose de aspectos del repartidor
 router.get("/:repartidorId/calificaciones-aspectos", async (req, res) => {

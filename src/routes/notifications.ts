@@ -7,18 +7,19 @@ const router = Router()
 // Guardar token FCM del dispositivo
 router.post("/token", async (req, res) => {
   try {
-    const authHeader = req.headers["authorization"]?.replace("Bearer ", "")
-    const userId = authHeader ? await verifyTokenAny(authHeader) : null
-    const { token } = req.body
-    if (!userId || !token) return res.status(400).json({ error: "No autorizado o token faltante" })
+    const authHeader = req.headers["authorization"]?.replace("Bearer ", "");
+    const authUserId = authHeader ? await verifyTokenAny(authHeader) : null;
+    const { token, userId: bodyUserId } = req.body;
+    const finalUserId = authUserId || bodyUserId;
+    if (!finalUserId || !token) return res.status(400).json({ error: "No autorizado o token faltante" });
     await sql`
       INSERT INTO device_tokens (user_id, token, updated_at)
-      VALUES (${userId}, ${token}, NOW())
+      VALUES (${finalUserId}, ${token}, NOW())
       ON CONFLICT (user_id, token) DO UPDATE SET updated_at = NOW()
-    `
-    res.json({ ok: true })
-  } catch (e: any) { res.status(500).json({ error: e.message }) }
-})
+    `;
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
 
 // POST /api/notificaciones/push - solo admins pueden enviar push
 router.post("/push", requireAdmin, async (req, res) => {

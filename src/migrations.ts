@@ -465,9 +465,15 @@ export async function runMigrations() {
         ('retiro_minimo', '50'),
         ('radio_max_usuario_km', '10'),
         ('radio_max_repartidor_km', '10'),
-        ('mantenimiento', 'false')
+        ('mantenimiento', 'false'),
+        ('cuenta_clabe_plataforma', '012180015171958337'),
+        ('banco_plataforma', 'BBVA México'),
+        ('titular_plataforma', 'Batalla Group'),
+        ('whatsapp', 'https://wa.me/527641311374'),
+        ('whatsapp_telefono', '527641311374')
       ON CONFLICT (clave) DO NOTHING
     `.catch(() => {});
+    await sql`UPDATE app_config SET valor = '012180015171958337' WHERE clave = 'cuenta_clabe_plataforma'`.catch(() => {});
     await sql`UPDATE app_config SET valor = '10' WHERE clave = 'radio_max_usuario_km' AND valor = '25'`.catch(() => {});
     await sql`UPDATE app_config SET valor = '10' WHERE clave = 'radio_max_repartidor_km' AND valor = '15'`.catch(() => {});
 

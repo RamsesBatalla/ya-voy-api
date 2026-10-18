@@ -21,7 +21,7 @@ router.patch('/:id/toggle', requireAuth, requireNegocioOwner, async (req, res) =
       SET esta_abierto = ${nuevoAbierto},
           cierre_manual_fecha = ${nuevoAbierto ? null : mx.fechaStr},
           apertura_manual_fecha = ${nuevoAbierto ? mx.fechaStr : null}
-      WHERE id = ${req.params.id}
+      WHERE id::text = ${req.params.id}::text
       RETURNING *
     `;
     res.json(rows[0]);
@@ -80,7 +80,7 @@ const updateNegocioPerfil = async (req: any, res: any) => {
         latitud       = COALESCE(${latNum}, latitud),
         lng           = COALESCE(${lngNum}, lng),
         longitud      = COALESCE(${lngNum}, longitud)
-      WHERE id = ${req.params.id}
+      WHERE id::text = ${req.params.id}::text
       RETURNING *
     `;
     if (!rows.length) return res.status(404).json({ error: 'Negocio no encontrado' });
@@ -107,7 +107,7 @@ router.patch('/:id/horarios', requireAuth, requireNegocioOwner, async (req, res)
         esta_abierto = ${abiertoSegunHorario},
         cierre_manual_fecha = NULL,
         apertura_manual_fecha = NULL
-      WHERE id = ${req.params.id}
+      WHERE id::text = ${req.params.id}::text
       RETURNING *
     `;
     res.json(rows[0]);
@@ -126,7 +126,7 @@ router.patch('/:id/estado', requireAuth, requireNegocioOwner, async (req, res) =
         esta_abierto = ${abierto},
         cierre_manual_fecha = ${abierto ? null : mx.fechaStr},
         apertura_manual_fecha = ${abierto ? mx.fechaStr : null}
-      WHERE id = ${req.params.id}
+      WHERE id::text = ${req.params.id}::text
       RETURNING *
     `;
     res.json(rows[0]);
@@ -141,7 +141,7 @@ router.patch('/:id/ocupado', requireAuth, requireNegocioOwner, async (req, res) 
     const { aceptando } = req.body;
     const rows = await sql`
       UPDATE viveres SET aceptando_pedidos = ${aceptando}
-      WHERE id = ${req.params.id}
+      WHERE id::text = ${req.params.id}::text
       RETURNING *
     `;
     res.json(rows[0]);
