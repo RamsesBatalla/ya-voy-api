@@ -148,6 +148,20 @@ export function initCronJobs() {
         }
       }
 
+      
+      // 2C. Auto-desconectar repartidores inactivos (sin actualizacion GPS por mas de 15 min y sin pedidos activos)
+      await sql`
+        UPDATE repartidores
+        SET status = 'offline', en_linea = false, disponible = false
+        WHERE (status = 'online' OR en_linea = true)
+          AND (ultima_actividad IS NOT NULL AND ultima_actividad < NOW() - INTERVAL '15 minutes')
+          AND id NOT IN (
+            SELECT DISTINCT repartidor_id FROM pedidos 
+            WHERE status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
+              AND repartidor_id IS NOT NULL
+          )
+      `.catch(() => {});
+
       // 2B-Alerta: Avisar al Admin en Telegram si un pedido a domicilio lleva más de 10 minutos en 'listo' o 'preparando' sin repartidor
       const demoradosSinRep = await sql`
         SELECT p.id, p.total, p.costo_envio, v.nombre as negocio_nombre

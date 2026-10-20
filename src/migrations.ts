@@ -223,6 +223,7 @@ export async function runMigrations() {
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS banco_nombre TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS titular_cuenta TEXT`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS ultima_actividad TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS razon_bloqueo TEXT`;
     await sql`UPDATE repartidores SET usuario_id = COALESCE(user_id, id) WHERE usuario_id IS NULL`.catch(() => {});
     await sql`UPDATE repartidores SET user_id = COALESCE(usuario_id, id) WHERE user_id IS NULL`.catch(() => {});

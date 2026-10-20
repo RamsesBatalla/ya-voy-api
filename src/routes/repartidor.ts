@@ -83,11 +83,33 @@ router.patch("/:userId/status", requireAuthRepartidor, async (req, res) => {
     const nuevoStatus = isOnline ? "online" : "offline";
     await sql`
       UPDATE repartidores
-      SET status = ${nuevoStatus}, en_linea = ${isOnline}, disponible = ${isOnline}
+      SET status = ${nuevoStatus}, en_linea = ${isOnline}, disponible = ${isOnline}, ultima_actividad = NOW()
       WHERE id = ${req.params.userId} OR usuario_id = ${req.params.userId}
     `;
     res.json({ ok: true, status: nuevoStatus, en_linea: isOnline });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ALL /api/repartidor/:userId/beacon-status (desconexión al cerrar app o background prolongado)
+router.all("/:userId/beacon-status", async (req, res) => {
+  const userId = req.params.userId;
+  const enLinea = req.query.en_linea === "true" || req.body?.en_linea === true;
+  try {
+    await sql`
+      UPDATE repartidores
+      SET status = ${enLinea ? "online" : "offline"}, en_linea = ${enLinea}, disponible = ${enLinea}, ultima_actividad = NOW()
+      WHERE (id = ${userId} OR usuario_id = ${userId})
+        AND id NOT IN (
+          SELECT DISTINCT repartidor_id FROM pedidos 
+          WHERE status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
+            AND repartidor_id IS NOT NULL
+        )
+    `;
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 function calcHaversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -404,7 +426,7 @@ router.patch("/:userId/ubicacion", requireAuthRepartidor, async (req, res) => {
     if (!lat || !lng) return res.status(400).json({ error: "lat y lng requeridos" })
     await sql`
       UPDATE repartidores
-      SET lat_actual = ${lat}, lng_actual = ${lng}, latitud = ${lat}, longitud = ${lng}, lat = ${lat}, lng = ${lng}
+      SET lat_actual = ${lat}, lng_actual = ${lng}, latitud = ${lat}, longitud = ${lng}, lat = ${lat}, lng = ${lng}, ultima_actividad = NOW()
       WHERE id = ${req.params.userId} OR usuario_id = ${req.params.userId}
     `
     res.json({ ok: true })
@@ -445,6 +467,7 @@ router.get("/disponibles/count", async (req, res) => {
       FROM repartidores r
       LEFT JOIN usuarios u ON u.id = r.id
       WHERE (r.status = 'online' OR r.en_linea = true)
+        AND (r.ultima_actividad IS NULL OR r.ultima_actividad >= NOW() - INTERVAL '15 minutes')
         AND COALESCE(r.bloqueado, false) = false
     `;
 
@@ -496,3 +519,4 @@ router.get("/:repartidorId/calificaciones-aspectos", async (req, res) => {
 });
 
 export default router
+
