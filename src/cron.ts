@@ -277,6 +277,42 @@ export function initCronJobs() {
     }
   }, 24 * 60 * 60 * 1000)
 
-  console.log("Cron jobs iniciados (horarios MX, fotos Storage, programados, auto-cancelación inteligente, alertas Admin)")
+  // ── 4. Auto-desconexión de repartidores inactivos (>10 min sin actividad ni pedidos en curso) ──
+  setInterval(async () => {
+    try {
+      const inactivos = await sql`
+        UPDATE repartidores
+        SET status = 'offline', en_linea = false, disponible = false
+        WHERE (status = 'online' OR en_linea = true)
+          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '10 minutes')
+          AND id NOT IN (
+            SELECT DISTINCT repartidor_id FROM pedidos 
+            WHERE status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
+              AND repartidor_id IS NOT NULL
+          )
+        RETURNING id, COALESCE(usuario_id, id) as user_id
+      `
+      for (const rep of inactivos) {
+        const uids = Array.from(new Set([rep.id, rep.user_id].filter(Boolean)))
+        for (const uid of uids) {
+          notificarCliente(uid, "repartidor_status", { en_linea: false, status: "offline" })
+          sendPushToUser(
+            sql,
+            uid,
+            "🛵 Ya Voy Repartidor",
+            "Te has desconectado automáticamente por inactividad. Abre la app cuando estés listo para recibir pedidos.",
+            { tipo: "desconexion_inactividad" }
+          ).catch(() => {})
+        }
+      }
+      if (inactivos.length > 0) {
+        console.log(`[cron:repartidores] Repartidores desconectados por inactividad: ${inactivos.length}`)
+      }
+    } catch (e: any) {
+      console.error("[cron:repartidor_inactivos]", e.message)
+    }
+  }, 2 * 60 * 1000)
+
+  console.log("Cron jobs iniciados (horarios MX, fotos Storage, programados, auto-cancelación inteligente, auto-desconexión repartidores, alertas Admin)")
 }
 

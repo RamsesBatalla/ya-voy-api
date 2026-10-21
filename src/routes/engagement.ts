@@ -16,7 +16,7 @@ router.get("/wallet/:userId", requireAuthUsuario, async (req, res) => {
     const movimientos = await sql`
       SELECT * FROM wallet_movimientos
       WHERE usuario_id = ${req.params.userId}
-      ORDER BY creado_en DESC LIMIT 20`
+      ORDER BY creado_en DESC LIMIT 30`
     res.json({ balance: Number(user?.wallet_balance || 0), movimientos })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -41,8 +41,8 @@ router.get("/wallet/recompensa-video/status/:userId", requireAuthUsuario, async 
     const [rows] = await sql`
       SELECT COUNT(*)::int as count FROM wallet_movimientos 
       WHERE usuario_id = ${authId} 
-        AND concepto LIKE 'Recompensa por video%' 
-        AND creado_en >= CURRENT_DATE
+        AND (concepto ILIKE '%video%' OR concepto ILIKE '%publicitario%')
+        AND (creado_en AT TIME ZONE 'America/Mexico_City')::date = (NOW() AT TIME ZONE 'America/Mexico_City')::date
     `
     res.json({ videosHoy: Number(rows?.count || 0), maxVideos: 10, recompensaPorVideo: 0.25 })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
@@ -55,18 +55,22 @@ router.post("/wallet/recompensa-video", requireAuthUsuario, async (req, res) => 
     const [check] = await sql`
       SELECT COUNT(*)::int as count FROM wallet_movimientos 
       WHERE usuario_id = ${authId} 
-        AND concepto LIKE 'Recompensa por video%' 
-        AND creado_en >= CURRENT_DATE
+        AND (concepto ILIKE '%video%' OR concepto ILIKE '%publicitario%')
+        AND (creado_en AT TIME ZONE 'America/Mexico_City')::date = (NOW() AT TIME ZONE 'America/Mexico_City')::date
     `
     const videosHoy = Number(check?.count || 0)
     if (videosHoy >= 10) {
-      return res.status(400).json({ error: "Has alcanzado el límite de 10 videos por hoy. ¡Vuelve mañana!" })
+      return res.status(400).json({ 
+        error: "Has alcanzado el límite de 10 videos por hoy. ¡El contador se reiniciará a la medianoche (12:00 AM hora México)! Vuelve mañana.",
+        videosHoy: 10,
+        maxVideos: 10
+      })
     }
 
     const recompensa = 0.25 // $0.25 MXN por video visto
     await sql`UPDATE usuarios SET wallet_balance = COALESCE(wallet_balance, 0) + ${recompensa} WHERE id = ${authId}`
     await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto)
-      VALUES (${authId}, 'credito', ${recompensa}, 'Recompensa por video publicitario')`
+      VALUES (${authId}, 'credito', ${recompensa}, 'Recompensa video publicitario (AdMob)')`
 
     const [user] = await sql`SELECT wallet_balance FROM usuarios WHERE id = ${authId}`
     res.json({ 
