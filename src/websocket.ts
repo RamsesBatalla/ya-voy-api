@@ -2,6 +2,8 @@ import { WebSocketServer, WebSocket } from "ws"
 import { IncomingMessage } from "http"
 import { Server } from "http"
 import { verifyTokenAny } from "./middleware/auth"
+import { sql } from "./db"
+import { sendPushToUser } from "./firebase"
 
 // ── Ubicación repartidor ──────────────────────────────────────────────────────
 const suscriptores = new Map<string, Set<WebSocket>>()
@@ -81,9 +83,45 @@ export function initWebSocket(server: Server) {
       if (!pedidoClientes.has(userId)) pedidoClientes.set(userId, new Set())
       pedidoClientes.get(userId)!.add(ws)
 
-      ws.on("close", () => {
+      ws.on("close", async () => {
         pedidoClientes.get(userId)?.delete(ws)
-        if (pedidoClientes.get(userId)?.size === 0) pedidoClientes.delete(userId)
+        if (pedidoClientes.get(userId)?.size === 0) {
+          pedidoClientes.delete(userId)
+          try {
+            const [rep] = await sql`
+              SELECT id, COALESCE(usuario_id, id) as user_id 
+              FROM repartidores 
+              WHERE (id = ${userId} OR usuario_id = ${userId}) 
+                AND (status = 'online' OR en_linea = true)
+            `
+            if (rep) {
+              const [activo] = await sql`
+                SELECT 1 FROM pedidos 
+                WHERE repartidor_id = ${rep.id} 
+                  AND status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
+                LIMIT 1
+              `
+              if (!activo) {
+                await sql`
+                  UPDATE repartidores 
+                  SET status = 'offline', en_linea = false, disponible = false, ultima_actividad = NOW()
+                  WHERE id = ${rep.id}
+                `
+                console.log(`[ws:close] Repartidor ${rep.id} desconectado automáticamente al cerrar conexión`)
+                const targetUid = rep.user_id || rep.id
+                sendPushToUser(
+                  sql,
+                  targetUid,
+                  "🛵 Ya Voy Repartidor",
+                  "Te has desconectado automáticamente al cerrar la app. Abre la app cuando estés listo para recibir pedidos.",
+                  { tipo: "desconexion_inactividad" }
+                ).catch(() => {})
+              }
+            }
+          } catch (e: any) {
+            console.error("[ws:close:repartidor]", e.message)
+          }
+        }
       })
     }
 

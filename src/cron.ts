@@ -277,14 +277,14 @@ export function initCronJobs() {
     }
   }, 24 * 60 * 60 * 1000)
 
-  // ── 4. Auto-desconexión de repartidores inactivos (>10 min sin actividad ni pedidos en curso) ──
+  // ── 4. Auto-desconexión de repartidores inactivos (>5 min sin actividad ni pedidos en curso) ──
   setInterval(async () => {
     try {
       const inactivos = await sql`
         UPDATE repartidores
         SET status = 'offline', en_linea = false, disponible = false
         WHERE (status = 'online' OR en_linea = true)
-          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '10 minutes')
+          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '5 minutes')
           AND id NOT IN (
             SELECT DISTINCT repartidor_id FROM pedidos 
             WHERE status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
@@ -311,7 +311,7 @@ export function initCronJobs() {
     } catch (e: any) {
       console.error("[cron:repartidor_inactivos]", e.message)
     }
-  }, 2 * 60 * 1000)
+  }, 60 * 1000)
 
   console.log("Cron jobs iniciados (horarios MX, fotos Storage, programados, auto-cancelación inteligente, auto-desconexión repartidores, alertas Admin)")
 }
