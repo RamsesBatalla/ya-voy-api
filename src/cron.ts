@@ -149,18 +149,39 @@ export function initCronJobs() {
       }
 
       
-      // 2C. Auto-desconectar repartidores inactivos (sin actualizacion GPS por mas de 15 min y sin pedidos activos)
-      await sql`
-        UPDATE repartidores
-        SET status = 'offline', en_linea = false, disponible = false
+      // 2C. Auto-desconectar repartidores inactivos (sin actualizacion GPS por mas de 10 min y sin pedidos activos)
+      const inactivosRepartidores = await sql`
+        SELECT id FROM repartidores
         WHERE (status = 'online' OR en_linea = true)
-          AND (ultima_actividad IS NOT NULL AND ultima_actividad < NOW() - INTERVAL '15 minutes')
+          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '10 minutes')
           AND id NOT IN (
             SELECT DISTINCT repartidor_id FROM pedidos 
             WHERE status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
               AND repartidor_id IS NOT NULL
           )
-      `.catch(() => {});
+      `.catch(() => []);
+
+      if (inactivosRepartidores && inactivosRepartidores.length > 0) {
+        const inactivosIds = inactivosRepartidores.map((r: any) => r.id);
+        await sql`
+          UPDATE repartidores
+          SET status = 'offline', en_linea = false, disponible = false
+          WHERE id IN ${sql(inactivosIds)}
+        `.catch(() => {});
+
+        for (const r of inactivosRepartidores) {
+          try {
+            notificarCliente(r.id, "desconexion_inactividad", { en_linea: false });
+            sendPushToUser(
+              sql,
+              r.id,
+              "🛵 Ya Voy Repartidor",
+              "Te has desconectado automáticamente por inactividad. Abre la app cuando estés listo para recibir pedidos.",
+              { tipo: "desconexion_inactividad" }
+            ).catch(() => {});
+          } catch {}
+        }
+      }
 
       // 2B-Alerta: Avisar al Admin en Telegram si un pedido a domicilio lleva más de 10 minutos en 'listo' o 'preparando' sin repartidor
       const demoradosSinRep = await sql`
