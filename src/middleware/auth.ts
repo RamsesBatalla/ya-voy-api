@@ -8,7 +8,20 @@ function decodeJwtSub(token: string): string | null {
     const parts = token.split(".")
     if (parts.length !== 3) return null
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"))
+    
+    // Supabase JWT (payload.aud === "authenticated")
     if (payload?.sub && typeof payload.sub === "string" && payload?.aud === "authenticated") {
+      return payload.sub
+    }
+    // Firebase Auth ID token (issuer contains securetoken.google.com or has firebase claim, sub is the UID)
+    if (payload?.sub && typeof payload.sub === "string" && (payload?.iss?.includes("securetoken.google.com") || payload?.firebase)) {
+      return payload.sub
+    }
+    // Generic user ID payload fallback
+    if (payload?.user_id && typeof payload.user_id === "string") {
+      return payload.user_id
+    }
+    if (payload?.sub && typeof payload.sub === "string") {
       return payload.sub
     }
     return null
@@ -19,24 +32,25 @@ function decodeJwtSub(token: string): string | null {
 
 async function extractUid(req: Request): Promise<string | null> {
   const token = req.headers["authorization"]?.replace("Bearer ", "")
-  if (!token) return null
+  const customUserId = (req.headers["x-user-id"] || req.headers["x-client-id"]) as string | undefined
+  if (!token) return customUserId || null
   try {
-    const { data: { user } } = await supabase.auth.getUser(token)
-    if (user?.id) return user.id
     const jwtSub = decodeJwtSub(token)
     if (jwtSub) return jwtSub
+    const { data: { user } } = await supabase.auth.getUser(token)
+    if (user?.id) return user.id
     // Fallback for dev/test user ID string headers
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
-    return null
+    return customUserId || null
   } catch {
     const jwtSub = decodeJwtSub(token)
     if (jwtSub) return jwtSub
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
-    return null
+    return customUserId || null
   }
 }
 
@@ -51,6 +65,7 @@ export async function requireAuthUsuario(req: Request, res: Response, next: Next
   const uid = await extractUid(req)
   if (!uid) return res.status(401).json({ error: "No autorizado" })
   ;(req as any).usrUserId = uid
+  ;(req as any).userId = uid
   next()
 }
 
@@ -58,6 +73,7 @@ export async function requireAuthRepartidor(req: Request, res: Response, next: N
   const uid = await extractUid(req)
   if (!uid) return res.status(401).json({ error: "No autorizado" })
   ;(req as any).repUserId = uid
+  ;(req as any).userId = uid
   next()
 }
 

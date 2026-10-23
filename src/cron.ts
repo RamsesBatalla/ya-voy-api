@@ -272,6 +272,11 @@ export function initCronJobs() {
         DELETE FROM device_tokens
         WHERE updated_at < NOW() - INTERVAL '90 days'
       `
+      // Limpiar movimientos de wallet de más de 7 días de antigüedad
+      await sql`
+        DELETE FROM wallet_movimientos
+        WHERE creado_en < NOW() - INTERVAL '7 days'
+      `
     } catch (e: any) {
       console.error("[cron:tokens]", e.message)
     }

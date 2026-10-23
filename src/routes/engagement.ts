@@ -2,6 +2,7 @@ import { Router } from "express"
 import { sql } from "../db"
 import { requireAuth, requireAuthUsuario } from "../middleware/auth"
 import { logError } from "../logger"
+import { sendPushToUser } from "../firebase"
 
 const router = Router()
 
@@ -9,14 +10,16 @@ const router = Router()
 
 // GET /api/usuario/wallet/:userId
 router.get("/wallet/:userId", requireAuthUsuario, async (req, res) => {
-  const authId = (req as any).usrUserId
+  const authId = (req as any).usrUserId || (req as any).userId
   if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const [user] = await sql`SELECT wallet_balance FROM usuarios WHERE id = ${req.params.userId}`
+    // Filtrar movimientos de los últimos 7 días como solicitó el usuario
     const movimientos = await sql`
       SELECT * FROM wallet_movimientos
       WHERE usuario_id = ${req.params.userId}
-      ORDER BY creado_en DESC LIMIT 30`
+        AND creado_en >= NOW() - INTERVAL '7 days'
+      ORDER BY creado_en DESC LIMIT 50`
     res.json({ balance: Number(user?.wallet_balance || 0), movimientos })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -35,7 +38,7 @@ router.post("/wallet/acreditar", requireAuth, async (req, res) => {
 
 // GET /api/usuario/wallet/recompensa-video/status/:userId
 router.get("/wallet/recompensa-video/status/:userId", requireAuthUsuario, async (req, res) => {
-  const authId = (req as any).usrUserId
+  const authId = (req as any).usrUserId || (req as any).userId
   if (authId !== req.params.userId) return res.status(403).json({ error: "Acceso denegado" })
   try {
     const [rows] = await sql`
@@ -50,7 +53,7 @@ router.get("/wallet/recompensa-video/status/:userId", requireAuthUsuario, async 
 
 // POST /api/usuario/wallet/recompensa-video
 router.post("/wallet/recompensa-video", requireAuthUsuario, async (req, res) => {
-  const authId = (req as any).usrUserId
+  const authId = (req as any).usrUserId || (req as any).userId
   try {
     const [check] = await sql`
       SELECT COUNT(*)::int as count FROM wallet_movimientos 
@@ -137,20 +140,33 @@ router.get("/referral/:userId", requireAuthUsuario, async (req, res) => {
 
 // POST /api/usuario/referral/usar — nuevo usuario aplica código de referido
 router.post("/referral/usar", requireAuthUsuario, async (req, res) => {
-  const authId = (req as any).usrUserId
+  const authId = (req as any).usrUserId || (req as any).userId
   try {
     const { codigo } = req.body
     if (!codigo) return res.status(400).json({ error: "Código requerido" })
-    const [referidor] = await sql`SELECT id FROM usuarios WHERE referral_code = ${codigo.toUpperCase()}`
+    const [referidor] = await sql`SELECT id FROM usuarios WHERE UPPER(referral_code) = ${codigo.toUpperCase()}`
     if (!referidor) return res.status(404).json({ error: "Código inválido" })
     if (referidor.id === authId) return res.status(400).json({ error: "No puedes usar tu propio código" })
     const yaUsado = await sql`SELECT id FROM referidos WHERE referido_id = ${authId}`
     if (yaUsado.length) return res.status(400).json({ error: "Ya usaste un código de referido" })
     await sql`INSERT INTO referidos (referidor_id, referido_id) VALUES (${referidor.id}, ${authId})`
+
     // Acreditar $15 al nuevo usuario (bienvenida)
     await sql`UPDATE usuarios SET wallet_balance = COALESCE(wallet_balance,0) + 15 WHERE id = ${authId}`
     await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto)
       VALUES (${authId}, 'credito', 15, 'Bienvenida por código de referido')`
+
+    // Acreditar $15 al amigo referidor (bono por invitar)
+    await sql`UPDATE usuarios SET wallet_balance = COALESCE(wallet_balance,0) + 15 WHERE id = ${referidor.id}`
+    await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto)
+      VALUES (${referidor.id}, 'credito', 15, 'Bono por amigo referido')`
+
+    // Notificación push al referidor
+    sendPushToUser(sql, referidor.id, "🎉 ¡Amigo referido registrado!", "¡Un amigo usó tu código! Se acreditaron +$15 MXN a tu monedero Ya Voy.", {
+      tipo: "referido_bono",
+      monto: "15"
+    }).catch(() => {})
+
     res.json({ ok: true, bonus: 15 })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

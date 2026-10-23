@@ -31,7 +31,7 @@ export async function sendPush(token: string, title: string, body: string, data?
           defaultVibrateTimings: true,
           priority: "high",
           visibility: "public",
-          icon: "ic_launcher",
+          icon: "ic_stat_notification",
           color: "#9C0D38",
         },
       },
