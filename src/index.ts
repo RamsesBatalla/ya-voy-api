@@ -101,6 +101,7 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req,
 app.use(express.json({ limit: "10mb" }));
 
 // ── Rutas públicas ────────────────────────────────────────────────────────────
+app.get("/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 app.get("/api/mantenimiento", async (_req, res) => {
   try {
@@ -143,12 +144,24 @@ if (!process.env.STRIPE_WEBHOOK_SECRET)
 if (!process.env.SENTRY_DSN)
   console.warn("⚠️  SENTRY_DSN no configurado — los errores no se reportarán a Sentry")
 
+function initKeepAlive() {
+  const url = process.env.RENDER_EXTERNAL_URL || "https://ya-voy-api.onrender.com";
+  // Ping periódico cada 8 minutos para evitar que Render suspenda la instancia por inactividad
+  setInterval(() => {
+    fetch(`${url}/api/health`)
+      .then((r) => r.json())
+      .then((d: any) => console.log(`[keep-alive] Heartbeat exitoso a ${url}/api/health:`, d?.ts))
+      .catch((err: any) => console.warn(`[keep-alive] Error en heartbeat:`, err.message));
+  }, 8 * 60 * 1000);
+}
+
 const server = createServer(app);
 initWebSocket(server);
 server.listen(PORT, async () => {
   console.log(`YA VOY API en http://localhost:${PORT}`);
   await runMigrations().catch(e => console.error("Error migraciones:", e.message));
   initCronJobs();
+  initKeepAlive();
   startTelegramPolling();
 });
 export default app;
