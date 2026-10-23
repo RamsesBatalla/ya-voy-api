@@ -25,8 +25,8 @@ router.get("/versions", async (_req: Request, res: Response) => {
 
     const versions = {
       usuario: {
-        latestVersionCode: Number(cfg.version_usuario_code || 41),
-        latestVersionName: cfg.version_usuario_name || "1.3.0",
+        latestVersionCode: Number(cfg.version_usuario_code || 42),
+        latestVersionName: cfg.version_usuario_name || "1.3.1",
         minVersionCode: Number(cfg.version_usuario_min || 40),
         forceUpdate: cfg.version_usuario_force === "true",
         title: "¡Nueva versión disponible en Google Play!",
@@ -34,8 +34,8 @@ router.get("/versions", async (_req: Request, res: Response) => {
         storeUrl: "https://play.google.com/store/apps/details?id=com.batallagroup.yavoy.usuario"
       },
       repartidor: {
-        latestVersionCode: Number(cfg.version_repartidor_code || 30),
-        latestVersionName: cfg.version_repartidor_name || "1.2.0",
+        latestVersionCode: Number(cfg.version_repartidor_code || 31),
+        latestVersionName: cfg.version_repartidor_name || "1.2.1",
         minVersionCode: Number(cfg.version_repartidor_min || 29),
         forceUpdate: cfg.version_repartidor_force === "true",
         title: "¡Nueva versión de Ya Voy Repartidor!",
@@ -43,8 +43,8 @@ router.get("/versions", async (_req: Request, res: Response) => {
         storeUrl: "https://play.google.com/store/apps/details?id=com.batallagroup.yavoy.repartidor"
       },
       restaurante: {
-        latestVersionCode: Number(cfg.version_restaurante_code || 35),
-        latestVersionName: cfg.version_restaurante_name || "1.2.5",
+        latestVersionCode: Number(cfg.version_restaurante_code || 36),
+        latestVersionName: cfg.version_restaurante_name || "1.2.6",
         minVersionCode: Number(cfg.version_restaurante_min || 34),
         forceUpdate: cfg.version_restaurante_force === "true",
         title: "¡Nueva versión de Ya Voy Restaurante!",
