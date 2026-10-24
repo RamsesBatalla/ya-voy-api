@@ -74,7 +74,7 @@ if (!isDev) {
     max: 1500,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path === "/api/health" || req.path === "/api/mantenimiento",
+    skip: (req) => req.path === "/api/health" || req.path === "/api/mantenimiento" || req.path === "/api/app-versions",
     message: { error: "Demasiadas solicitudes, intenta en unos minutos" },
   }));
 
@@ -129,6 +129,8 @@ app.use("/api/negocios",      negocioRouter);
 app.use("/api/usuario",       usuarioRouter);
 app.use("/api/repartidor",    repartidorRouter);
 app.use("/api/config",        configRouter);
+app.use("/api/app-versions", (req, res, next) => { req.url = "/versions"; (configRouter as any)(req, res, next); });
+app.use("/api/notificaciones", notificationsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/soporte",       soporteRouter);
 app.use("/api/admin",         adminRouter);
