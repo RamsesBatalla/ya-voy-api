@@ -947,6 +947,49 @@ router.patch("/pedidos/:id/rating", requireAuthUsuario, async (req, res) => {
 });
 
 // PATCH /api/usuario/pedidos/:id/rating-cliente — el repartidor califica al cliente
+
+
+// POST /api/usuario/pedidos/:id/propina
+router.post("/pedidos/:id/propina", requireAuthUsuario, async (req: any, res: any) => {
+  try {
+    const { monto } = req.body;
+    const propinaNum = Number(monto);
+    if (!propinaNum || propinaNum <= 0) {
+      return res.status(400).json({ error: "Monto de propina inválido" });
+    }
+
+    const [pedido] = await sql`
+      SELECT id, cliente_id, repartidor_id, status FROM pedidos WHERE id = ${req.params.id}
+    `;
+    if (!pedido) return res.status(404).json({ error: "Pedido no encontrado" });
+    if (!pedido.repartidor_id) return res.status(400).json({ error: "El pedido no tiene repartidor asignado" });
+
+    await sql.begin(async (tx: any) => {
+      await tx`
+        UPDATE pedidos SET propina = COALESCE(propina, 0) + ${propinaNum} WHERE id = ${pedido.id}
+      `;
+      await tx`
+        UPDATE repartidores SET saldo = COALESCE(saldo, 0) + ${propinaNum} WHERE id = ${pedido.repartidor_id}
+      `;
+    });
+
+    try {
+      const { sendPushToUser } = await import("../firebase");
+      await sendPushToUser(
+        sql,
+        pedido.repartidor_id,
+        "🎉 ¡Recibiste una propina!",
+        `El cliente te ha dejado una propina de ${propinaNum.toFixed(2)} MXN por tu excelente servicio.`,
+        { pedidoId: pedido.id, tipo: "propina", monto: String(propinaNum) }
+      );
+    } catch {}
+
+    res.json({ ok: true, propina: propinaNum });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.patch("/pedidos/:id/rating-cliente", async (req, res) => {
   try {
     const { rating_cliente, aspectos_cliente } = req.body;

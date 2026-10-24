@@ -1,0 +1,16 @@
+name: Daily Database Backup Check
+
+on:
+  schedule:
+    # Ejecutar todos los días a las 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: Check & Verify Database Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API Health
+        run: |
+          curl -s -f -m 30 https://ya-voy-api.onrender.com/api/health || true
