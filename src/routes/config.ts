@@ -25,27 +25,27 @@ router.get("/versions", async (_req: Request, res: Response) => {
 
     const versions = {
       usuario: {
-        latestVersionCode: Number(cfg.version_usuario_code || 46),
+        latestVersionCode: Number(cfg.version_usuario_code || 47),
         latestVersionName: cfg.version_usuario_name || "1.3.5",
-        minVersionCode: Number(cfg.version_usuario_min || 46),
+        minVersionCode: Number(cfg.version_usuario_min || 47),
         forceUpdate: cfg.version_usuario_force === "true",
         title: "¡Nueva versión disponible en Google Play!",
         message: "Actualiza Ya Voy para disfrutar de recompensas diarias mejoradas, monedero rápido y notificaciones en tiempo real.",
         storeUrl: "https://play.google.com/store/apps/details?id=com.batallagroup.yavoy.usuario"
       },
       repartidor: {
-        latestVersionCode: Number(cfg.version_repartidor_code || 37),
+        latestVersionCode: Number(cfg.version_repartidor_code || 38),
         latestVersionName: cfg.version_repartidor_name || "1.2.6",
-        minVersionCode: Number(cfg.version_repartidor_min || 37),
+        minVersionCode: Number(cfg.version_repartidor_min || 38),
         forceUpdate: cfg.version_repartidor_force === "true",
         title: "¡Nueva versión de Ya Voy Repartidor!",
         message: "Actualiza para contar con desconexión automática garantizada y alertas prioritarias de pedidos en tu zona.",
         storeUrl: "https://play.google.com/store/apps/details?id=com.batallagroup.yavoy.repartidor"
       },
       restaurante: {
-        latestVersionCode: Number(cfg.version_restaurante_code || 43),
+        latestVersionCode: Number(cfg.version_restaurante_code || 44),
         latestVersionName: cfg.version_restaurante_name || "1.3.1",
-        minVersionCode: Number(cfg.version_restaurante_min || 43),
+        minVersionCode: Number(cfg.version_restaurante_min || 44),
         forceUpdate: cfg.version_restaurante_force === "true",
         title: "¡Nueva versión de Ya Voy Restaurante!",
         message: "Actualiza tu aplicación comercial para recibir nuevos pedidos al instante y optimizar tus horarios y menú.",
