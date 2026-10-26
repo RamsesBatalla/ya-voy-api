@@ -19,7 +19,7 @@ const getConfig = async () => {
     comisionPct: (cfg.comision_pct ?? 18) / 100,
     fondoPct:    (cfg.fondo_pct    ?? 20) / 100,
     precioPorKm: cfg.envio_por_km ?? cfg.envio_precio_km ?? 8,
-    envioMinimo: cfg.envio_minimo    ?? 25,
+    envioMinimo: cfg.envio_minimo    ?? 20,
   }
 }
 
@@ -343,7 +343,7 @@ router.post("/webhook", async (req, res) => {
         // Si hay repartidor ya asignado, transferirle costo_envio + propina reales del pedido
         const repId = repartidorId || rows[0]?.repartidor_id
         if (repId && rows[0]) {
-          const montoTotal = Number(rows[0].costo_envio || 35) + Number(rows[0].propina || 0)
+          const montoTotal = Number(rows[0].costo_envio ?? 20) + Number(rows[0].propina || 0)
           const repRows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${repId}`
           const repAccountId = repRows[0]?.stripe_account_id
           if (repAccountId) {
@@ -360,7 +360,7 @@ router.post("/webhook", async (req, res) => {
 
     } else if (repartidorId) {
       // Flujo legacy sin pedidoId: transferir solo costo envío del metadata
-      const costoEnvio = Math.max(35, parseFloat(pi.metadata?.costoEnvio || "35") || 35)
+      const costoEnvio = Math.max(0, parseFloat(pi.metadata?.costoEnvio || "20") || 20)
       try {
         const rows = await sql`SELECT stripe_account_id FROM repartidores WHERE id = ${repartidorId}`
         const repAccountId = rows[0]?.stripe_account_id

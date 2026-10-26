@@ -132,7 +132,7 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
           notificarCliente(r.id, "pedido_disponible", { ...pedido, negocio_nombre: negNombre })
           const tituloPush = status === "preparando" ? "🛵 Nuevo pedido disponible" : "🍽️ Pedido listo para recoger"
           const cuerpoPush = status === "preparando"
-            ? `${negNombre} está preparando un pedido ($${Number(pedido.costo_envio || 25).toFixed(0)} envío). ¡Acéptalo ahora!`
+            ? `${negNombre} está preparando un pedido ($${Number(pedido.costo_envio ?? 20).toFixed(0)} envío). ¡Acéptalo ahora!`
             : `Hay un pedido listo para recoger en ${negNombre}`
           await sendPushToUser(sql, r.id, tituloPush, cuerpoPush, { pedidoId: String(pedido.id), tipo: "pedido_disponible" }).catch(() => {})
         }

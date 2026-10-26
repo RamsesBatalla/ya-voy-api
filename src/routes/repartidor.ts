@@ -165,7 +165,7 @@ router.get("/pedidos/disponibles", requireAuthRepartidor, async (req, res) => {
           ...p,
           distancia_al_restaurante_km: distRepRestKm,
           distancia_entrega_km: distRestCliKm,
-          costo_envio: p.costo_envio ?? 25,
+          costo_envio: p.costo_envio ?? 20,
         };
       })
       .filter((p: any) => {

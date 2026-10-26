@@ -66,7 +66,7 @@ const initTablas = async () => {
 
   )`
 
-  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS costo_envio NUMERIC DEFAULT 35`
+  await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS costo_envio NUMERIC DEFAULT 20`
 
   await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tiempo_estimado TEXT`
 
@@ -138,7 +138,7 @@ router.get("/negocios", async (req, res) => {
     }
 
     const cfgEnvio = await sql`SELECT clave, valor FROM app_config WHERE clave IN ('envio_minimo', 'envio_por_km', 'radio_max_usuario_km')`.catch(() => []);
-    let envioMinimo = 25;
+    let envioMinimo = 20;
     let envioPorKm = 8;
     let radioMaxUsuarioKm = 10;
     cfgEnvio.forEach((c: any) => {
@@ -168,6 +168,7 @@ router.get("/negocios", async (req, res) => {
           lng: nLng,
           distancia_km: distKm,
           costo_envio: costoEnvioEstimado,
+          costo_envio_base: envioMinimo,
           imagen_url: n.imagen_url ?? n.logo_url ?? null,
         };
       })
@@ -350,7 +351,7 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     const precioMap: Record<string, number> = {}
     dbProductos.forEach((p: any) => { precioMap[p.id] = Number(p.precio) })
 
-    const envio = costoEnvio ?? 35;
+    const envio = costoEnvio ?? 20;
     let subtotalCalculado = 0
     for (const item of items) {
       const precioBase = precioMap[item.productoId] ?? Number(item.precioBase ?? item.precio ?? 0)
