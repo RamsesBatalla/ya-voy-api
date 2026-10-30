@@ -155,7 +155,7 @@ router.get('/:id/stats', requireAuth, requireNegocioOwner, async (req, res) => {
   try {
     const id = req.params.id
     const pedidos = await sql`
-      SELECT id, total, costo_envio, status, items, creado_en, rating_negocio, aspectos_negocio
+      SELECT id, total, costo_envio, propina, status, items, creado_en, rating_negocio, aspectos_negocio
       FROM pedidos
       WHERE negocio_id = ${id}
       ORDER BY creado_en DESC
@@ -171,7 +171,7 @@ router.get('/:id/stats', requireAuth, requireNegocioOwner, async (req, res) => {
     const envioDefault = cfg.envio_minimo ?? 25
 
     const calcNeto = (p: any) => {
-      const subtotal = Math.max(0, Number(p.total) - Number(p.costo_envio ?? envioDefault))
+      const subtotal = Math.max(0, Number(p.total || 0) - Number(p.costo_envio ?? envioDefault) - Number(p.propina || 0))
       return subtotal * (1 - comisionPct)
     }
 

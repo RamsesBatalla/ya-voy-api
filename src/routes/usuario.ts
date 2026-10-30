@@ -10,6 +10,7 @@ import { requireAuth, requireAuthUsuario } from "../middleware/auth";
 import { getCache, setCache, invalidateCache } from "../cache";
 import { logError } from "../logger";
 import { sincronizarEstadoNegocio, getMexicoNow } from "../utils/horarios";
+import { procesarReembolsoCancelacion } from "./pedidos";
 
 const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2026-04-22.dahlia" });
 
@@ -156,8 +157,9 @@ router.get("/negocios", async (req, res) => {
         let costoEnvioEstimado = envioMinimo;
 
         if (uLat != null && uLng != null && !isNaN(uLat) && !isNaN(uLng) && nLat != null && nLng != null) {
-          distKm = Math.round(calcHaversineKm(uLat, uLng, Number(nLat), Number(nLng)) * 10) / 10;
-          costoEnvioEstimado = Math.max(envioMinimo, Math.round(distKm * envioPorKm));
+          const distRuta = calcHaversineKm(uLat, uLng, Number(nLat), Number(nLng)) * 1.25;
+          distKm = Math.round(distRuta * 10) / 10;
+          costoEnvioEstimado = Math.max(envioMinimo, Math.round(distRuta * envioPorKm));
         }
 
         return {
@@ -306,7 +308,8 @@ router.post("/cupones/validar", limitCupones, async (req, res) => {
 
       return res.status(400).json({ error: "Este cupon ha expirado" })
 
-    if (cupon.usos_max && cupon.usos_actual >= cupon.usos_max)
+    const usosActuales = Number(cupon.usos_actual ?? cupon.usos_actuales ?? 0)
+    if (cupon.usos_max && usosActuales >= cupon.usos_max)
 
       return res.status(400).json({ error: "Este cupon ya no tiene usos disponibles" })
 
@@ -314,9 +317,10 @@ router.post("/cupones/validar", limitCupones, async (req, res) => {
 
       return res.status(400).json({ error: "Este cupon no aplica para este restaurante" })
 
-    if (cupon.minimo_compra && Number(total) < Number(cupon.minimo_compra))
+    const minCompra = Number(cupon.minimo_compra ?? cupon.monto_minimo ?? 0)
+    if (minCompra > 0 && Number(total) < minCompra)
 
-      return res.status(400).json({ error: "Compra minima para este cupon: $" + Number(cupon.minimo_compra).toFixed(2) })
+      return res.status(400).json({ error: "Compra minima para este cupon: $" + minCompra.toFixed(2) })
 
     const descuento = cupon.tipo === "porcentaje"
 
@@ -337,7 +341,13 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
   try {
 
     const authUserId = (req as any).userId;
-    const { clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago, latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio, tiempoEstimado, tiempoEstimadoMin, paymentIntentId, propina, status: statusInicial, tipoEntrega, programadoPara, walletMonto } = req.body;
+    const {
+      clienteId, negocioId, items, total, direccionEntrega, notas, metodoPago,
+      latEntrega, lngEntrega, cuponCodigo, descuentoCupon, costoEnvio,
+      tiempoEstimado, tiempoEstimadoMin, paymentIntentId, propina,
+      status: statusInicial, tipoEntrega, programadoPara, walletMonto,
+      cambioPara, cambio_para, referenciasEntrega, referencias_entrega
+    } = req.body;
 
     if (authUserId !== clienteId) return res.status(403).json({ error: "No autorizado" });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "El pedido debe tener al menos un producto" });
@@ -423,6 +433,14 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     const totalNum = Number(totalCalculado) || 0;
     const subtotalNum = Math.max(0, totalNum - (tipoEntrega === 'pickup' ? 0 : envio) - (Number(propina) || 0));
 
+    // Validar saldo real de wallet en BD antes de descontar
+    const [userRow] = await sql`SELECT COALESCE(wallet_balance, 0) as wallet_balance FROM usuarios WHERE id = ${clienteId} LIMIT 1`.catch(() => [{ wallet_balance: 0 }]);
+    const walletMontoReal = Math.max(0, Math.min(Number(walletMonto || 0), Number(userRow?.wallet_balance || 0), totalNum));
+
+    const cambioParaVal = cambioPara ?? cambio_para ?? null;
+    const cambioParaNum = cambioParaVal != null && cambioParaVal !== "" ? Number(cambioParaVal) : null;
+    const referenciasEntregaVal = referenciasEntrega ?? referencias_entrega ?? null;
+
     const rows = await sql`
       INSERT INTO pedidos (
         cliente_id, negocio_id, items,
@@ -431,7 +449,8 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         codigo_entrega, codigo_restaurante, palabras_verificacion,
         lat_entrega, lng_entrega, latitud_entrega, longitud_entrega,
         tiempo_estimado, tiempo_estimado_min, distancia_km, payment_intent_id,
-        tipo_entrega, programado_para, wallet_monto, cupon_codigo
+        tipo_entrega, programado_para, wallet_monto, cupon_codigo,
+        cambio_para, referencias_entrega
       ) VALUES (
         ${clienteId}, ${negocioId}, ${JSON.stringify(items)},
         ${totalNum}, ${totalNum}, ${subtotalNum}, ${tipoEntrega === 'pickup' ? 0 : envio}, ${Number(propina) || 0},
@@ -440,7 +459,8 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
         ${codEntrega}, ${codRest}, ${JSON.stringify({ entrega: palabrasEntrega, restaurante: palabrasRestaurante })},
         ${latEntrega || null}, ${lngEntrega || null}, ${latEntrega || null}, ${lngEntrega || null},
         ${tiempoEstimado || null}, ${tiempoEstimadoMin || null}, ${distRestClienteKm}, ${paymentIntentId || null},
-        ${tipoEntrega || 'domicilio'}, ${programadoPara || null}, ${Number(walletMonto) || 0}, ${cuponCodigo || null}
+        ${tipoEntrega || 'domicilio'}, ${programadoPara || null}, ${walletMontoReal}, ${cuponCodigo || null},
+        ${cambioParaNum}, ${referenciasEntregaVal}
       )
       RETURNING *
     `;
@@ -448,12 +468,17 @@ router.post("/pedidos", requireAuth, limitPedidos, async (req, res) => {
     const nuevoPedido = rows[0];
 
     if (cuponCodigo) {
-      await sql`UPDATE cupones SET usos_actual = usos_actual + 1 WHERE codigo = ${cuponCodigo}`.catch(e => logError(e, "cupones:usos"))
+      await sql`
+        UPDATE cupones
+        SET usos_actual = COALESCE(usos_actual, 0) + 1,
+            usos_actuales = COALESCE(usos_actuales, 0) + 1
+        WHERE codigo = ${cuponCodigo}
+      `.catch(e => logError(e, "cupones:usos"))
     }
 
-    if (walletMonto && Number(walletMonto) > 0) {
-      await sql`UPDATE usuarios SET wallet_balance = GREATEST(0, COALESCE(wallet_balance,0) - ${Number(walletMonto)}) WHERE id = ${clienteId}`.catch(e => logError(e, "wallet:debito"))
-      await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${Number(walletMonto)}, 'Aplicado en pedido', ${nuevoPedido.id})`.catch(e => logError(e, "wallet:mov"))
+    if (walletMontoReal > 0) {
+      await sql`UPDATE usuarios SET wallet_balance = GREATEST(0, COALESCE(wallet_balance,0) - ${walletMontoReal}) WHERE id = ${clienteId}`.catch(e => logError(e, "wallet:debito"))
+      await sql`INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id) VALUES (${clienteId}, 'debito', ${walletMontoReal}, 'Aplicado en pedido', ${nuevoPedido.id})`.catch(e => logError(e, "wallet:mov"))
     }
 
     // Notificar en tiempo real al propietario del restaurante cuando el pedido ya está activo ('nuevo' o 'programado')
@@ -498,15 +523,17 @@ router.post("/pedidos/:id/confirmar-pago", requireAuthUsuario, async (req, res) 
     }
 
     const piId = paymentIntentId || pedido.payment_intent_id;
-    if (piId) {
-      try {
-        const pi = await stripeClient.paymentIntents.retrieve(piId);
-        if (!["succeeded", "processing", "requires_capture"].includes(pi.status)) {
-          return res.status(400).json({ error: `El pago aún no se ha completado (estado: ${pi.status}).` });
-        }
-      } catch (e: any) {
-        logError(e, "confirmar-pago:retrieve");
+    if (!piId) {
+      return res.status(400).json({ error: "paymentIntentId requerido para confirmar el pago." });
+    }
+    try {
+      const pi = await stripeClient.paymentIntents.retrieve(piId);
+      if (pi.status !== "succeeded") {
+        return res.status(400).json({ error: `El pago aún no se ha completado (estado: ${pi.status}).` });
       }
+    } catch (e: any) {
+      logError(e, "confirmar-pago:retrieve");
+      return res.status(400).json({ error: "No se pudo verificar el pago con Stripe." });
     }
 
     const nuevoStatus = pedido.programado_para ? "programado" : "nuevo";
@@ -736,6 +763,7 @@ router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
 
     if (pedido.cliente_id) {
       notificarCliente(pedido.cliente_id, "pedido_update", enriched);
+      notificarCliente(pedido.cliente_id, "pedido_actualizado", enriched);
       const eta = pedido.tiempo_estimado ? ` (${pedido.tiempo_estimado})` : "";
       sendPushToUser(
         sql,
@@ -747,6 +775,7 @@ router.post("/pedidos/:id/verificar-restaurante", async (req, res) => {
     }
     if (pedido.negocio_owner_id) {
       notificarCliente(pedido.negocio_owner_id, "pedido_update", enriched);
+      notificarCliente(pedido.negocio_owner_id, "pedido_actualizado", enriched);
     }
     if (pedido.repartidor_id) {
       notificarCliente(pedido.repartidor_id, "pedido_update", enriched);
@@ -844,6 +873,7 @@ router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
 
     if (pedido.cliente_id) {
       notificarCliente(pedido.cliente_id, "pedido_update", updated);
+      notificarCliente(pedido.cliente_id, "pedido_actualizado", updated);
       sendPushToUser(
         sql,
         pedido.cliente_id,
@@ -854,6 +884,7 @@ router.post("/pedidos/:id/verificar-entrega", async (req, res) => {
     }
     if (pedido.negocio_owner_id) {
       notificarCliente(pedido.negocio_owner_id, "pedido_update", updated);
+      notificarCliente(pedido.negocio_owner_id, "pedido_actualizado", updated);
       sendPushToUser(
         sql,
         pedido.negocio_owner_id,
@@ -886,16 +917,32 @@ router.patch("/pedidos/:id/cancelar", requireAuthUsuario, async (req, res) => {
 
       return res.status(400).json({ error: "No se puede cancelar en este punto" });
 
-    const [updated] = await sql`UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW(), razon_cancelacion = 'Cancelado por el cliente' WHERE id = ${req.params.id} RETURNING *`;
+    const [updated] = await sql`
+      UPDATE pedidos
+      SET status = 'cancelado', cancelado_en = NOW(), actualizado_en = NOW(), razon_cancelacion = 'Cancelado por el cliente'
+      WHERE id = ${req.params.id} AND status != 'cancelado'
+      RETURNING *
+    `;
+
+    if (updated) {
+      await procesarReembolsoCancelacion(updated, "Reembolso por pedido cancelado por el cliente");
+    }
+    const pedidoOut = updated || { ...rows[0], status: "cancelado" };
+    if (rows[0].cliente_id) {
+      notificarCliente(rows[0].cliente_id, "pedido_update", pedidoOut);
+      notificarCliente(rows[0].cliente_id, "pedido_actualizado", pedidoOut);
+    }
 
     if (rows[0].repartidor_id) {
-      notificarCliente(rows[0].repartidor_id, "pedido_update", updated);
+      notificarCliente(rows[0].repartidor_id, "pedido_update", pedidoOut);
+      notificarCliente(rows[0].repartidor_id, "pedido_actualizado", pedidoOut);
       await sendPushToUser(sql, rows[0].repartidor_id, "Pedido cancelado", "El usuario canceló el pedido", { tipo: "pedido_cancelado", pedido_id: req.params.id }).catch(() => {})
     }
     if (rows[0].negocio_id) {
       const neg = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${rows[0].negocio_id}`.catch(() => []);
       if (neg[0]?.owner_id) {
-        notificarCliente(neg[0].owner_id, "pedido_update", updated);
+        notificarCliente(neg[0].owner_id, "pedido_update", pedidoOut);
+        notificarCliente(neg[0].owner_id, "pedido_actualizado", pedidoOut);
         await sendPushToUser(sql, neg[0].owner_id, "❌ Pedido cancelado por el cliente", "El cliente canceló su pedido.", { pedidoId: req.params.id, status: "cancelado" }).catch(() => {})
       }
     }
@@ -1212,8 +1259,8 @@ router.get("/favoritos/:clienteId", requireAuth, async (req, res) => {
   try {
     const rows = await sql`
       SELECT v.* FROM favoritos f
-      JOIN viveres v ON v.id::text = f.negocio_id
-      WHERE f.cliente_id = ${req.params.clienteId}
+      JOIN viveres v ON v.id::text = f.negocio_id::text
+      WHERE COALESCE(f.cliente_id, f.usuario_id) = ${req.params.clienteId}
       ORDER BY f.creado_en DESC`
     res.json(rows)
   } catch (e: any) { res.status(500).json({ error: e.message }) }
@@ -1225,7 +1272,18 @@ router.post("/favoritos", requireAuth, async (req, res) => {
   try {
     const { negocioId } = req.body
     if (!negocioId) return res.status(400).json({ error: "negocioId requerido" })
-    await sql`INSERT INTO favoritos (cliente_id, negocio_id) VALUES (${authUserId}, ${negocioId}) ON CONFLICT DO NOTHING`
+    const exists = await sql`
+      SELECT 1 FROM favoritos
+      WHERE COALESCE(cliente_id, usuario_id) = ${authUserId} AND negocio_id::text = ${String(negocioId)}
+      LIMIT 1
+    `.catch(() => [])
+    if (!exists.length) {
+      await sql`
+        INSERT INTO favoritos (cliente_id, usuario_id, negocio_id)
+        VALUES (${authUserId}, ${authUserId}, ${negocioId})
+        ON CONFLICT DO NOTHING
+      `
+    }
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -1235,7 +1293,7 @@ router.delete("/favoritos/:clienteId/:negocioId", requireAuth, async (req, res) 
   const authUserId = (req as any).userId
   if (authUserId !== req.params.clienteId) return res.status(403).json({ error: "Acceso denegado" })
   try {
-    await sql`DELETE FROM favoritos WHERE cliente_id = ${authUserId} AND negocio_id = ${req.params.negocioId}`
+    await sql`DELETE FROM favoritos WHERE COALESCE(cliente_id, usuario_id) = ${authUserId} AND negocio_id::text = ${req.params.negocioId}`
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { sql } from '../db';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, ADMIN_IDS } from '../middleware/auth';
 
 const router = Router();
 
@@ -53,6 +53,19 @@ router.post('/productos', requireAuth, async (req, res) => {
 
 router.put('/productos/:id', requireAuth, async (req, res) => {
   try {
+    const uid = (req as any).userId;
+    const check = await sql`
+      SELECT p.id, p.negocio_id, COALESCE(v.owner_id, v.user_id) as owner_id
+      FROM productos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!check.length) return res.status(404).json({ error: "Producto no encontrado" });
+    if (check[0].owner_id && check[0].owner_id !== uid && !ADMIN_IDS.includes(uid)) {
+      return res.status(403).json({ error: "No tienes permiso para modificar este producto" });
+    }
+
     const { nombre, descripcion, precio, categoria, disponible, destacado, imagen_url, opciones } = req.body;
     const cleanOpciones = sanitizarOpciones(opciones);
     const rows = await sql`
@@ -67,6 +80,19 @@ router.put('/productos/:id', requireAuth, async (req, res) => {
 
 router.patch('/productos/:id/agotado', requireAuth, async (req, res) => {
   try {
+    const uid = (req as any).userId;
+    const check = await sql`
+      SELECT p.id, p.negocio_id, COALESCE(v.owner_id, v.user_id) as owner_id
+      FROM productos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!check.length) return res.status(404).json({ error: "Producto no encontrado" });
+    if (check[0].owner_id && check[0].owner_id !== uid && !ADMIN_IDS.includes(uid)) {
+      return res.status(403).json({ error: "No tienes permiso para modificar este producto" });
+    }
+
     const rows = await sql`UPDATE productos SET agotado = NOT agotado WHERE id = ${req.params.id} RETURNING negocio_id, agotado`
     if (rows[0]?.negocio_id) invalidateCache("productos:" + rows[0].negocio_id)
     res.json({ ok: true, agotado: rows[0]?.agotado })
@@ -75,6 +101,19 @@ router.patch('/productos/:id/agotado', requireAuth, async (req, res) => {
 
 router.delete('/productos/:id', requireAuth, async (req, res) => {
   try {
+    const uid = (req as any).userId;
+    const check = await sql`
+      SELECT p.id, p.negocio_id, COALESCE(v.owner_id, v.user_id) as owner_id
+      FROM productos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id = ${req.params.id}
+      LIMIT 1
+    `;
+    if (!check.length) return res.status(404).json({ error: "Producto no encontrado" });
+    if (check[0].owner_id && check[0].owner_id !== uid && !ADMIN_IDS.includes(uid)) {
+      return res.status(403).json({ error: "No tienes permiso para eliminar este producto" });
+    }
+
     const rows = await sql`DELETE FROM productos WHERE id = ${req.params.id} RETURNING negocio_id`
     if (rows[0]?.negocio_id) invalidateCache("productos:" + rows[0].negocio_id)
     res.json({ ok: true });

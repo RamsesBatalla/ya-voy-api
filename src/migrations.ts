@@ -9,6 +9,8 @@ export async function runMigrations() {
   try {
     console.log("Iniciando migraciones en la base de datos de Supabase...");
 
+    await sql`CREATE EXTENSION IF NOT EXISTS pg_trgm;`.catch(() => {});
+
     // 1. Tabla de Usuarios
     await sql`
       CREATE TABLE IF NOT EXISTS usuarios (
@@ -225,6 +227,8 @@ export async function runMigrations() {
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS ultima_actividad TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
     await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS razon_bloqueo TEXT`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS saldo NUMERIC(10,2) DEFAULT 0`;
+    await sql`ALTER TABLE repartidores ADD COLUMN IF NOT EXISTS incidentes_abandono INT DEFAULT 0`;
     await sql`UPDATE repartidores SET usuario_id = COALESCE(user_id, id) WHERE usuario_id IS NULL`.catch(() => {});
     await sql`UPDATE repartidores SET user_id = COALESCE(usuario_id, id) WHERE user_id IS NULL`.catch(() => {});
     await sql`UPDATE repartidores SET vehiculo = vehiculo_tipo WHERE vehiculo IS NULL AND vehiculo_tipo IS NOT NULL`.catch(() => {});
@@ -363,7 +367,14 @@ export async function runMigrations() {
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS intentos_codigo INT DEFAULT 0`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_confirmado BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS wallet_monto NUMERIC DEFAULT 0`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_fallido_en TIMESTAMPTZ`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cambio_para NUMERIC(10,2)`;
+    await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS referencias_entrega TEXT`;
     await sql`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_cliente_id ON pedidos(cliente_id)`.catch(() => {});
+    await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_negocio_id ON pedidos(negocio_id)`.catch(() => {});
+    await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_repartidor_id ON pedidos(repartidor_id)`.catch(() => {});
+    await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_status_creado ON pedidos(status, creado_en)`.catch(() => {});
     await sql`UPDATE pedidos SET total = monto_total WHERE (total IS NULL OR total = 0) AND monto_total IS NOT NULL AND monto_total > 0`.catch(() => {});
     await sql`UPDATE pedidos SET monto_total = total WHERE (monto_total IS NULL OR monto_total = 0) AND total IS NOT NULL AND total > 0`.catch(() => {});
 
@@ -407,12 +418,20 @@ export async function runMigrations() {
     await sql`
       CREATE TABLE IF NOT EXISTS favoritos (
         id SERIAL PRIMARY KEY,
-        usuario_id TEXT NOT NULL,
+        usuario_id TEXT,
+        cliente_id TEXT,
         negocio_id UUID REFERENCES viveres(id) ON DELETE CASCADE,
         creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         UNIQUE (usuario_id, negocio_id)
       );
     `;
+    await sql`ALTER TABLE favoritos ADD COLUMN IF NOT EXISTS cliente_id TEXT`;
+    await sql`ALTER TABLE favoritos ADD COLUMN IF NOT EXISTS usuario_id TEXT`;
+    await sql`ALTER TABLE favoritos ALTER COLUMN usuario_id DROP NOT NULL`.catch(() => {});
+    await sql`ALTER TABLE favoritos ALTER COLUMN cliente_id DROP NOT NULL`.catch(() => {});
+    await sql`UPDATE favoritos SET cliente_id = usuario_id WHERE cliente_id IS NULL AND usuario_id IS NOT NULL`.catch(() => {});
+    await sql`UPDATE favoritos SET usuario_id = cliente_id WHERE usuario_id IS NULL AND cliente_id IS NOT NULL`.catch(() => {});
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_favoritos_cliente_negocio ON favoritos(cliente_id, negocio_id) WHERE cliente_id IS NOT NULL`.catch(() => {});
 
     // 10. Tabla de Mensajes (compatible con ambos esquemas)
     await sql`
@@ -486,13 +505,28 @@ export async function runMigrations() {
         tipo TEXT NOT NULL DEFAULT 'monto',
         valor NUMERIC NOT NULL DEFAULT 0,
         monto_minimo NUMERIC DEFAULT 0,
+        minimo_compra NUMERIC DEFAULT 0,
         usos_max INT,
         usos_actuales INT DEFAULT 0,
+        usos_actual INT DEFAULT 0,
+        negocio_id TEXT,
+        nombre TEXT,
+        descripcion TEXT,
         activo BOOLEAN DEFAULT true,
         expira_en TIMESTAMPTZ,
         creado_en TIMESTAMPTZ DEFAULT NOW()
       );
     `;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS usos_actual INT DEFAULT 0`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS usos_actuales INT DEFAULT 0`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS minimo_compra NUMERIC DEFAULT 0`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS monto_minimo NUMERIC DEFAULT 0`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS negocio_id TEXT`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS nombre TEXT`;
+    await sql`ALTER TABLE cupones ADD COLUMN IF NOT EXISTS descripcion TEXT`;
+    await sql`UPDATE cupones SET usos_actual = COALESCE(usos_actuales, 0) WHERE usos_actual IS NULL OR (usos_actual = 0 AND COALESCE(usos_actuales, 0) > 0)`.catch(() => {});
+    await sql`UPDATE cupones SET usos_actuales = COALESCE(usos_actual, 0) WHERE usos_actuales IS NULL OR (usos_actuales = 0 AND COALESCE(usos_actual, 0) > 0)`.catch(() => {});
+    await sql`UPDATE cupones SET minimo_compra = COALESCE(monto_minimo, 0) WHERE minimo_compra IS NULL OR (minimo_compra = 0 AND COALESCE(monto_minimo, 0) > 0)`.catch(() => {});
     await sql`
       CREATE TABLE IF NOT EXISTS wallet_movimientos (
         id SERIAL PRIMARY KEY,

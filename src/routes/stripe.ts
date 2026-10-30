@@ -71,7 +71,7 @@ router.post("/payment-intent", requireAuth, async (req, res) => {
 
     const cfg = await getConfig()
     const amountCentavos = Math.round(amount * 100)
-    const subtotalSinEnvio = Math.round((amount - (costoEnvio || 0)) * 100)
+    const subtotalSinEnvio = Math.max(0, Math.round((amount - (costoEnvio || 0) - (req.body.propina || 0)) * 100))
     const comisionCentavos = Math.round(subtotalSinEnvio * cfg.comisionPct)
 
     let transferData: any = undefined
@@ -329,9 +329,11 @@ router.post("/webhook", async (req, res) => {
     if (pedidoId) {
       try {
         const rows = await sql`
-          UPDATE pedidos SET status = 'nuevo', actualizado_en = NOW()
-          WHERE id = ${pedidoId} AND status = 'pendiente_pago'
-          RETURNING negocio_id, cliente_id, costo_envio, propina`
+          UPDATE pedidos SET status = CASE WHEN status = 'pendiente_pago' THEN (CASE WHEN programado_para IS NOT NULL THEN 'programado' ELSE 'nuevo' END) ELSE status END,
+            pago_confirmado = true,
+            actualizado_en = NOW()
+          WHERE id = ${pedidoId}
+          RETURNING negocio_id, cliente_id, costo_envio, propina, repartidor_id`
         if (rows[0]?.negocio_id) {
           const negocio = await sql`SELECT owner_id, nombre FROM viveres WHERE id = ${rows[0].negocio_id}`
           if (negocio[0]?.owner_id) {

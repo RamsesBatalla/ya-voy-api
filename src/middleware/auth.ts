@@ -8,6 +8,9 @@ function decodeJwtSub(token: string): string | null {
     const parts = token.split(".")
     if (parts.length !== 3) return null
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"))
+    if (payload?.exp && typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) {
+      return null
+    }
     
     // Supabase JWT (payload.aud === "authenticated")
     if (payload?.sub && typeof payload.sub === "string" && payload?.aud === "authenticated") {
@@ -30,27 +33,39 @@ function decodeJwtSub(token: string): string | null {
   }
 }
 
+function isSensitiveEndpoint(req: Request): boolean {
+  const url = (req.originalUrl || req.url || "").toLowerCase()
+  return (
+    url.includes("/admin") ||
+    url.includes("/fondo") ||
+    url.includes("/wallet/acreditar") ||
+    url.includes("/retiros")
+  )
+}
+
 async function extractUid(req: Request): Promise<string | null> {
-  const token = req.headers["authorization"]?.replace("Bearer ", "")
+  const token = req.headers["authorization"]?.replace("Bearer ", "").trim()
   const customUserId = (req.headers["x-user-id"] || req.headers["x-client-id"]) as string | undefined
-  if (!token) return customUserId || null
+  const allowHeaderFallback = !isSensitiveEndpoint(req)
+
+  if (!token) return allowHeaderFallback ? (customUserId || null) : null
   try {
-    const jwtSub = decodeJwtSub(token)
-    if (jwtSub) return jwtSub
     const { data: { user } } = await supabase.auth.getUser(token)
     if (user?.id) return user.id
+    const jwtSub = decodeJwtSub(token)
+    if (jwtSub) return jwtSub
     // Fallback for dev/test user ID string headers
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
-    return customUserId || null
+    return allowHeaderFallback ? (customUserId || null) : null
   } catch {
     const jwtSub = decodeJwtSub(token)
     if (jwtSub) return jwtSub
     if (token.startsWith("user_") || token.startsWith("rep_") || token.startsWith("rest_") || token.startsWith("dev_")) {
       return token
     }
-    return customUserId || null
+    return allowHeaderFallback ? (customUserId || null) : null
   }
 }
 
@@ -79,11 +94,19 @@ export async function requireAuthRepartidor(req: Request, res: Response, next: N
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const adminSecret = process.env.ADMIN_SECRET || ""
-  const secretHeader = req.headers["x-admin-secret"] || req.headers["authorization"]?.replace("Bearer ", "")
+  const secretHeader = req.headers["x-admin-secret"] || req.headers["authorization"]?.replace("Bearer ", "").trim()
   if (adminSecret && secretHeader === adminSecret) {
     return next()
   }
-  const uid = await extractUid(req)
+  const token = req.headers["authorization"]?.replace("Bearer ", "").trim()
+  if (!token) {
+    res.status(403).json({ error: "No autorizado" }); return
+  }
+  let uid: string | null = null
+  try {
+    const { data: { user } } = await supabase.auth.getUser(token)
+    if (user?.id) uid = user.id
+  } catch {}
   if (!uid || !ADMIN_IDS.includes(uid)) {
     res.status(403).json({ error: "No autorizado" }); return
   }

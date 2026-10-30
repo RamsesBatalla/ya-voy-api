@@ -267,10 +267,10 @@ router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => 
       SELECT p.*, v.nombre as negocio_nombre, v.direccion as negocio_direccion,
              COALESCE(v.lat, v.latitud) as lat_restaurante,
              COALESCE(v.lng, v.longitud) as lng_restaurante,
-             v.owner_id as negocio_owner_id,
+             COALESCE(v.owner_id, v.user_id) as negocio_owner_id,
              u.telefono as cliente_telefono,
              u.nombre as cliente_nombre,
-             ROUND((p.total * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
+             ROUND((GREATEST(0, COALESCE(p.total, 0) - COALESCE(p.costo_envio, 0) - COALESCE(p.propina, 0)) * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
       FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       LEFT JOIN usuarios u ON u.id = p.cliente_id
@@ -283,10 +283,12 @@ router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => 
     // Notificar en tiempo real al cliente y al restaurante que un repartidor aceptó el pedido
     if (pedidoAceptado.cliente_id) {
       notificarCliente(pedidoAceptado.cliente_id, "pedido_update", pedidoAceptado);
+      notificarCliente(pedidoAceptado.cliente_id, "pedido_actualizado", pedidoAceptado);
       sendPushToUser(sql, pedidoAceptado.cliente_id, "🛵 Repartidor asignado", "Un repartidor aceptó tu pedido y va rumbo al restaurante.", { pedidoId: String(pedidoAceptado.id), status: pedidoAceptado.status }).catch(() => {});
     }
     if (pedidoAceptado.negocio_owner_id) {
       notificarCliente(pedidoAceptado.negocio_owner_id, "pedido_update", pedidoAceptado);
+      notificarCliente(pedidoAceptado.negocio_owner_id, "pedido_actualizado", pedidoAceptado);
       sendPushToUser(sql, pedidoAceptado.negocio_owner_id, "🛵 Repartidor en camino al local", `Un repartidor aceptó el pedido #${String(pedidoAceptado.id).slice(-5).toUpperCase()}. Pídele la clave de recolección al entregar.`, { pedidoId: String(pedidoAceptado.id), status: pedidoAceptado.status }).catch(() => {});
     }
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -296,18 +298,33 @@ router.patch("/pedidos/:id/aceptar", requireAuthRepartidor, async (req, res) => 
 router.patch("/pedidos/:id/status", requireAuthRepartidor, async (req, res) => {
   try {
     const { status } = req.body
-    const current = await sql`SELECT status FROM pedidos WHERE id::text = ${req.params.id}`
+    const current = await sql`
+      SELECT p.status, COALESCE(v.owner_id, v.user_id) as owner_id
+      FROM pedidos p
+      LEFT JOIN viveres v ON v.id = p.negocio_id
+      WHERE p.id::text = ${req.params.id}
+    `
     if (!current.length) return res.status(404).json({ error: "Pedido no encontrado" })
     const estadoActual = current[0].status
     if (!TRANS_REPARTIDOR[estadoActual]?.includes(status))
       return res.status(400).json({ error: `No se puede pasar de '${estadoActual}' a '${status}'` })
 
     const rows = await sql`
-      UPDATE pedidos SET status = ${status}, actualizado_en = NOW()
+      UPDATE pedidos SET status = ${status},
+        entregado_en = CASE WHEN ${status} = 'entregado' THEN NOW() ELSE entregado_en END,
+        actualizado_en = NOW()
       WHERE id::text = ${req.params.id} RETURNING *
     `;
-    res.json(rows[0]);
-    if (rows[0]?.cliente_id) notificarCliente(rows[0].cliente_id, "pedido_update", rows[0]);
+    const updated = rows[0];
+    res.json(updated);
+    if (updated?.cliente_id) {
+      notificarCliente(updated.cliente_id, "pedido_update", updated);
+      notificarCliente(updated.cliente_id, "pedido_actualizado", updated);
+    }
+    if (current[0]?.owner_id) {
+      notificarCliente(current[0].owner_id, "pedido_update", updated);
+      notificarCliente(current[0].owner_id, "pedido_actualizado", updated);
+    }
 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -321,7 +338,7 @@ router.get("/:userId/pedidos", async (req, res) => {
              COALESCE(v.lng, v.longitud) as lng_restaurante,
              u.telefono as cliente_telefono,
              u.nombre as cliente_nombre,
-             ROUND((p.total * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
+             ROUND((GREATEST(0, COALESCE(p.total, 0) - COALESCE(p.costo_envio, 0) - COALESCE(p.propina, 0)) * (SELECT COALESCE(valor::numeric, 18) / 100 FROM app_config WHERE clave = 'comision_pct'))::numeric, 2) as comision
       FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       LEFT JOIN usuarios u ON u.id = p.cliente_id
@@ -352,18 +369,20 @@ router.patch("/pedidos/:id/esperando", requireAuthRepartidor, async (req, res) =
       if (dist > 0.3) return res.status(400).json({ error: "Debes estar a menos de 300m del cliente" });
     }
     const updated = await sql`
-      UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW()
+      UPDATE pedidos SET status = 'esperando_cliente', esperando_desde = NOW(), actualizado_en = NOW()
       WHERE id::text = ${req.params.id}
-      RETURNING cliente_id, negocio_id`
+      RETURNING *`
     const pedidoUpd = updated[0]
     if (pedidoUpd?.cliente_id) {
-      notificarCliente(pedidoUpd.cliente_id, "pedido_update", { id: req.params.id, status: "esperando_cliente", esperando_desde: new Date().toISOString() })
+      notificarCliente(pedidoUpd.cliente_id, "pedido_update", pedidoUpd)
+      notificarCliente(pedidoUpd.cliente_id, "pedido_actualizado", pedidoUpd)
       await sendPushToUser(sql, pedidoUpd.cliente_id, "📍 Tu repartidor está afuera", "Tu repartidor llegó a tu ubicación y te está esperando (tienes 10 minutos para recibir tu pedido).", { pedidoId: req.params.id, status: "esperando_cliente" }).catch(() => {})
     }
     if (pedidoUpd?.negocio_id) {
-      const negocio = await sql`SELECT owner_id FROM viveres WHERE id = ${pedidoUpd.negocio_id}`
+      const negocio = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${pedidoUpd.negocio_id}`
       if (negocio[0]?.owner_id) {
-        notificarCliente(negocio[0].owner_id, "pedido_update", { id: req.params.id, status: "esperando_cliente" })
+        notificarCliente(negocio[0].owner_id, "pedido_update", pedidoUpd)
+        notificarCliente(negocio[0].owner_id, "pedido_actualizado", pedidoUpd)
         await sendPushToUser(sql, negocio[0].owner_id, "Repartidor llegó con el cliente", "El repartidor está esperando al cliente en la dirección de entrega.", { pedidoId: req.params.id }).catch(() => {})
       }
     }
@@ -374,7 +393,7 @@ router.patch("/pedidos/:id/esperando", requireAuthRepartidor, async (req, res) =
 // Auto-expirar espera (llamado desde cliente cuando el timer expira, exigiendo foto de evidencia)
 router.patch("/pedidos/:id/expirar-espera", requireAuthRepartidor, async (req, res) => {
   try {
-    const rows = await sql`SELECT status, esperando_desde, foto_entrega, foto_entrega_url, cliente_id, repartidor_id FROM pedidos WHERE id::text = ${req.params.id}`;
+    const rows = await sql`SELECT status, esperando_desde, foto_entrega, foto_entrega_url, cliente_id, repartidor_id, negocio_id FROM pedidos WHERE id::text = ${req.params.id}`;
     if (!rows.length || rows[0].status !== "esperando_cliente") return res.status(400).json({ error: "No aplica" });
     const p = rows[0];
     const fotoEvidencia = p.foto_entrega || p.foto_entrega_url || req.body?.fotoUrl;
@@ -388,6 +407,14 @@ router.patch("/pedidos/:id/expirar-espera", requireAuthRepartidor, async (req, r
     const [updated] = await sql`UPDATE pedidos SET status = 'entregado', entregado_en = NOW(), actualizado_en = NOW() WHERE id::text = ${req.params.id} RETURNING *`;
     if (p.cliente_id) {
       notificarCliente(p.cliente_id, "pedido_update", updated);
+      notificarCliente(p.cliente_id, "pedido_actualizado", updated);
+    }
+    if (p.negocio_id) {
+      const negocio = await sql`SELECT COALESCE(owner_id, user_id) as owner_id FROM viveres WHERE id = ${p.negocio_id}`.catch(() => []);
+      if (negocio[0]?.owner_id) {
+        notificarCliente(negocio[0].owner_id, "pedido_update", updated);
+        notificarCliente(negocio[0].owner_id, "pedido_actualizado", updated);
+      }
     }
     notificarContingenciaAdmin({
       titulo: "Espera de 10 min expirada (Cliente no salió)",

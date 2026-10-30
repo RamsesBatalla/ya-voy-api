@@ -37,6 +37,46 @@ const initFotoCols = async () => {
 }
 initFotoCols().catch(e => console.error("Error init foto cols:", e.message))
 
+export async function procesarReembolsoCancelacion(pedido: any, concepto: string) {
+  if (!pedido || !pedido.id) return
+  try {
+    const montoReembolso =
+      pedido.metodo_pago === "tarjeta" && pedido.pago_confirmado
+        ? Math.max(Number(pedido.total || 0), Number(pedido.wallet_monto || 0))
+        : Number(pedido.wallet_monto || 0)
+
+    if (montoReembolso > 0 && pedido.cliente_id) {
+      const yaReembolsado = await sql`
+        SELECT id FROM wallet_movimientos
+        WHERE pedido_id = ${String(pedido.id)} AND tipo = 'credito'
+        LIMIT 1
+      `.catch(() => [])
+      if (!yaReembolsado.length) {
+        await sql`
+          UPDATE usuarios
+          SET wallet_balance = COALESCE(wallet_balance, 0) + ${montoReembolso}
+          WHERE id = ${pedido.cliente_id}
+        `
+        await sql`
+          INSERT INTO wallet_movimientos (usuario_id, tipo, monto, concepto, pedido_id)
+          VALUES (${pedido.cliente_id}, 'credito', ${montoReembolso}, ${concepto}, ${String(pedido.id)})
+        `
+      }
+    }
+
+    if (pedido.cupon_codigo) {
+      await sql`
+        UPDATE cupones
+        SET usos_actual = GREATEST(0, COALESCE(usos_actual, 0) - 1),
+            usos_actuales = GREATEST(0, COALESCE(usos_actuales, 0) - 1)
+        WHERE codigo = ${pedido.cupon_codigo}
+      `.catch(() => {})
+    }
+  } catch (e: any) {
+    logError(e, "reembolso:cancelacion")
+  }
+}
+
 router.get("/:negocioId/pedidos", requireAuth, async (req, res) => {
   try {
     const authUserId = (req as any).userId
@@ -69,16 +109,24 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
     const rows = await sql`
       UPDATE pedidos SET status = ${status},
         entregado_en = CASE WHEN ${status} = 'entregado' THEN NOW() ELSE entregado_en END,
+        cancelado_en = CASE WHEN ${status} = 'cancelado' THEN NOW() ELSE cancelado_en END,
         actualizado_en = NOW()
       WHERE id = ${req.params.id} RETURNING *`
     const pedido = rows[0]
     if (!pedido) return res.status(404).json({ error: "Pedido no encontrado" })
     res.json(pedido)
 
-    if (pedido.cliente_id) notificarCliente(pedido.cliente_id, "pedido_update", pedido)
+    if (pedido.cliente_id) {
+      notificarCliente(pedido.cliente_id, "pedido_update", pedido)
+      notificarCliente(pedido.cliente_id, "pedido_actualizado", pedido)
+    }
 
     const negocio = await sql`SELECT COALESCE(owner_id, user_id) as owner_id, nombre, COALESCE(lat, latitud) as lat, COALESCE(lng, longitud) as lng FROM viveres WHERE id = ${pedido.negocio_id}`
     const ownerID = negocio[0]?.owner_id
+    if (ownerID) {
+      notificarCliente(ownerID, "pedido_update", pedido)
+      notificarCliente(ownerID, "pedido_actualizado", pedido)
+    }
     const negNombre = negocio[0]?.nombre || "el restaurante"
     const negLat = negocio[0]?.lat != null ? Number(negocio[0].lat) : null
     const negLng = negocio[0]?.lng != null ? Number(negocio[0].lng) : null
@@ -139,12 +187,14 @@ router.patch("/pedidos/:id/status", requireAuth, async (req, res) => {
       }
     }
 
-    if (status === "cancelado") {
+    if (status === "cancelado" && estadoActual !== "cancelado") {
+      await procesarReembolsoCancelacion(pedido, "Reembolso por pedido cancelado")
       if (pedido.cliente_id) {
         await sendPushToUser(sql, pedido.cliente_id, "Pedido cancelado", "Tu pedido fue cancelado", { pedidoId: pedido.id, status: "cancelado" }).catch(() => {})
       }
       if (pedido.repartidor_id) {
         notificarCliente(pedido.repartidor_id, "pedido_update", pedido)
+        notificarCliente(pedido.repartidor_id, "pedido_actualizado", pedido)
         await sendPushToUser(sql, pedido.repartidor_id, "Pedido cancelado", `El pedido de ${negNombre} fue cancelado`, { pedidoId: pedido.id, status: "cancelado" }).catch(() => {})
       }
     }
@@ -160,16 +210,21 @@ router.patch("/pedidos/:id/rechazar", requireAuth, async (req, res) => {
     const authUserId = (req as any).userId
     const { razon } = req.body
     const rows = await sql`
-      UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW(), razon_cancelacion = ${razon || 'Rechazado por el restaurante'}
+      UPDATE pedidos SET status = 'cancelado', cancelado_en = NOW(), actualizado_en = NOW(), razon_cancelacion = ${razon || 'Rechazado por el restaurante'}
       WHERE id = ${req.params.id} AND status = 'nuevo'
         AND negocio_id IN (SELECT id FROM viveres WHERE owner_id = ${authUserId} OR user_id = ${authUserId})
-      RETURNING cliente_id, negocio_id`
+      RETURNING *`
     if (!rows.length) return res.status(400).json({ error: "Pedido no encontrado o no autorizado" })
-    const { cliente_id } = rows[0]
+    const pedido = rows[0]
+    await procesarReembolsoCancelacion(pedido, "Reembolso por pedido rechazado por el restaurante")
+    const { cliente_id } = pedido
     if (cliente_id) {
-      notificarCliente(cliente_id, "pedido_update", { id: req.params.id, status: "cancelado", razon_cancelacion: razon || "Rechazado por el restaurante" })
+      notificarCliente(cliente_id, "pedido_update", pedido)
+      notificarCliente(cliente_id, "pedido_actualizado", pedido)
       await sendPushToUser(sql, cliente_id, "Pedido rechazado", razon || "El restaurante no pudo aceptar tu pedido", { pedidoId: req.params.id }).catch(() => {})
     }
+    notificarCliente(authUserId, "pedido_update", pedido)
+    notificarCliente(authUserId, "pedido_actualizado", pedido)
     res.json({ ok: true })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
@@ -178,7 +233,7 @@ router.patch("/pedidos/:id/cancelar", requireAuth, async (req, res) => {
   try {
     const authUserId = (req as any).userId
     const rows = await sql`
-      SELECT p.status, p.cliente_id, p.repartidor_id, COALESCE(v.owner_id, v.user_id) as owner_id FROM pedidos p
+      SELECT p.*, COALESCE(v.owner_id, v.user_id) as owner_id FROM pedidos p
       LEFT JOIN viveres v ON v.id = p.negocio_id
       WHERE p.id = ${req.params.id}`
     if (!rows.length) return res.status(404).json({ error: "Pedido no encontrado" })
@@ -186,13 +241,28 @@ router.patch("/pedidos/:id/cancelar", requireAuth, async (req, res) => {
     const { status, cliente_id, repartidor_id } = rows[0]
     if (!["nuevo", "preparando"].includes(status))
       return res.status(400).json({ error: "No se puede cancelar en este punto" })
-    await sql`UPDATE pedidos SET status = ${"cancelado"}, cancelado_en = NOW(), razon_cancelacion = 'Cancelado por el restaurante' WHERE id = ${req.params.id}`
+    const [updated] = await sql`
+      UPDATE pedidos
+      SET status = 'cancelado', cancelado_en = NOW(), actualizado_en = NOW(), razon_cancelacion = 'Cancelado por el restaurante'
+      WHERE id = ${req.params.id} AND status != 'cancelado'
+      RETURNING *
+    `
+    const pedidoCancelado = updated || { ...rows[0], status: "cancelado" }
+    if (updated) {
+      await procesarReembolsoCancelacion(pedidoCancelado, "Reembolso por cancelación del restaurante")
+    }
     if (cliente_id) {
-      notificarCliente(cliente_id, "pedido_update", { id: req.params.id, status: "cancelado" })
+      notificarCliente(cliente_id, "pedido_update", pedidoCancelado)
+      notificarCliente(cliente_id, "pedido_actualizado", pedidoCancelado)
       await sendPushToUser(sql, cliente_id, "Pedido cancelado", "El restaurante canceló tu pedido", { pedidoId: req.params.id }).catch(() => {})
     }
+    if (rows[0].owner_id) {
+      notificarCliente(rows[0].owner_id, "pedido_update", pedidoCancelado)
+      notificarCliente(rows[0].owner_id, "pedido_actualizado", pedidoCancelado)
+    }
     if (repartidor_id) {
-      notificarCliente(repartidor_id, "pedido_update", { id: req.params.id, status: "cancelado" })
+      notificarCliente(repartidor_id, "pedido_update", pedidoCancelado)
+      notificarCliente(repartidor_id, "pedido_actualizado", pedidoCancelado)
       await sendPushToUser(sql, repartidor_id, "Pedido cancelado", "El restaurante canceló el pedido", { pedidoId: req.params.id }).catch(() => {})
     }
     res.json({ ok: true })

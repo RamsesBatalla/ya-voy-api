@@ -1,6 +1,6 @@
 import { Router } from "express"
 import { sql } from "../db"
-import { requireAuth, requireAuthUsuario } from "../middleware/auth"
+import { requireAuth, requireAuthUsuario, requireAdmin } from "../middleware/auth"
 import { logError } from "../logger"
 import { sendPushToUser } from "../firebase"
 
@@ -25,7 +25,7 @@ router.get("/wallet/:userId", requireAuthUsuario, async (req, res) => {
 })
 
 // POST /api/usuario/wallet/acreditar — uso interno (refunds, bienvenida)
-router.post("/wallet/acreditar", requireAuth, async (req, res) => {
+router.post("/wallet/acreditar", requireAdmin, async (req, res) => {
   try {
     const { usuarioId, monto, concepto, pedidoId } = req.body
     if (!usuarioId || !monto || !concepto) return res.status(400).json({ error: "Faltan campos" })

@@ -32,9 +32,9 @@ initTables().catch(e => console.error("Error init fondo:", e.message))
 router.get("/resumen", requireAdmin, async (_req, res) => {
   try {
     const cfg = await getConfig()
-    // Total comisiones acumuladas (pedidos entregados)
+    // Total comisiones acumuladas (pedidos entregados, sobre el subtotal de comida sin envío ni propina)
     const comRows = await sql`
-      SELECT COALESCE(SUM(ROUND((total * ${cfg.comisionPct})::numeric, 2)), 0) as total
+      SELECT COALESCE(SUM(ROUND((GREATEST(0, COALESCE(total, 0) - COALESCE(costo_envio, 0) - COALESCE(propina, 0)) * ${cfg.comisionPct})::numeric, 2)), 0) as total
       FROM pedidos WHERE status = 'entregado'`
     const totalComision = Number(comRows[0]?.total || 0)
 
@@ -67,10 +67,12 @@ router.post("/uso", requireAdmin, async (req, res) => {
   try {
     const { monto, descripcion } = req.body
     if (!monto || monto <= 0) return res.status(400).json({ error: "Monto invalido" })
-    if (!monto || monto <= 0) return res.status(400).json({ error: "Monto invalido" })
     // Verificar saldo disponible antes de registrar
     const cfg = await getConfig()
-    const comRows = await sql`SELECT COALESCE(SUM(ROUND((total * ${cfg.comisionPct})::numeric, 2)), 0) as total FROM pedidos WHERE status = 'entregado'`
+    const comRows = await sql`
+      SELECT COALESCE(SUM(ROUND((GREATEST(0, COALESCE(total, 0) - COALESCE(costo_envio, 0) - COALESCE(propina, 0)) * ${cfg.comisionPct})::numeric, 2)), 0) as total
+      FROM pedidos WHERE status = 'entregado'
+    `
     const totalComision = Number(comRows[0]?.total || 0)
     const fondoAcumulado = Math.round(totalComision * cfg.fondoPct * 100) / 100
     const usosRows = await sql`SELECT COALESCE(SUM(monto), 0) as total FROM fondo_recuperacion WHERE tipo = 'uso'`

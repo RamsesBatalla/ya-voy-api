@@ -11,6 +11,7 @@ const ubicaciones  = new Map<string, { lat: number; lng: number }>()
 
 // ── Pedidos en tiempo real ────────────────────────────────────────────────────
 const pedidoClientes = new Map<string, Set<WebSocket>>() // userId → conexiones
+const desconexionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function notificarCliente(clienteId: string, tipo: string, data: unknown) {
   const conns = pedidoClientes.get(clienteId)
@@ -21,6 +22,19 @@ export function notificarCliente(clienteId: string, tipo: string, data: unknown)
 
 export function initWebSocket(server: Server) {
   const wss = new WebSocketServer({ server })
+
+  // Intervalo de ping cada 30 segundos para evitar que Render corte conexiones inactivas
+  const pingInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.ping() } catch {}
+      }
+    })
+  }, 30 * 1000)
+
+  wss.on("close", () => {
+    clearInterval(pingInterval)
+  })
 
   wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
     const url    = new URL(req.url || "", "http://localhost")
@@ -44,10 +58,26 @@ export function initWebSocket(server: Server) {
           try {
             const { lat, lng } = JSON.parse(data.toString())
             if (!lat || !lng) return
-            ubicaciones.set(repartidorId, { lat, lng })
+            const latNum = Number(lat)
+            const lngNum = Number(lng)
+            if (isNaN(latNum) || isNaN(lngNum)) return
+            ubicaciones.set(repartidorId, { lat: latNum, lng: lngNum })
+            // Actualizar ubicación y última actividad en BD para que el cron no desconecte al repartidor en movimiento
+            sql`
+              UPDATE repartidores
+              SET ultima_actividad = NOW(),
+                  lat_actual = ${latNum},
+                  lng_actual = ${lngNum},
+                  latitud = ${latNum},
+                  longitud = ${lngNum},
+                  lat = ${latNum},
+                  lng = ${lngNum}
+              WHERE id = ${repartidorId} OR usuario_id = ${repartidorId}
+            `.catch(() => {})
+
             const clientes = suscriptores.get(repartidorId)
             if (clientes) {
-              const msg = JSON.stringify({ lat, lng, ts: Date.now() })
+              const msg = JSON.stringify({ lat: latNum, lng: lngNum, ts: Date.now() })
               clientes.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg) })
             }
           } catch (e: any) { console.error("WS ubicacion parse:", e.message) }
@@ -80,47 +110,67 @@ export function initWebSocket(server: Server) {
       const authUserId = await verifyTokenAny(token)
       if (!authUserId || authUserId !== userId) { ws.close(1008, "No autorizado"); return }
 
+      // Si el repartidor se reconectó dentro del grace period, cancelar timer de desconexión
+      const pendingTimer = desconexionTimers.get(userId)
+      if (pendingTimer) {
+        clearTimeout(pendingTimer)
+        desconexionTimers.delete(userId)
+      }
+
       if (!pedidoClientes.has(userId)) pedidoClientes.set(userId, new Set())
       pedidoClientes.get(userId)!.add(ws)
 
-      ws.on("close", async () => {
+      ws.on("close", () => {
         pedidoClientes.get(userId)?.delete(ws)
         if (pedidoClientes.get(userId)?.size === 0) {
           pedidoClientes.delete(userId)
-          try {
-            const [rep] = await sql`
-              SELECT id, COALESCE(usuario_id, id) as user_id 
-              FROM repartidores 
-              WHERE (id = ${userId} OR usuario_id = ${userId}) 
-                AND (status = 'online' OR en_linea = true)
-            `
-            if (rep) {
-              const [activo] = await sql`
-                SELECT 1 FROM pedidos 
-                WHERE repartidor_id = ${rep.id} 
-                  AND status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
-                LIMIT 1
+
+          // Grace period de 20 segundos antes de marcar como offline por si es una reconexión breve
+          const prevTimer = desconexionTimers.get(userId)
+          if (prevTimer) clearTimeout(prevTimer)
+
+          const timer = setTimeout(async () => {
+            desconexionTimers.delete(userId)
+            const activeConns = pedidoClientes.get(userId)
+            if (activeConns && activeConns.size > 0) return
+
+            try {
+              const [rep] = await sql`
+                SELECT id, COALESCE(usuario_id, id) as user_id 
+                FROM repartidores 
+                WHERE (id = ${userId} OR usuario_id = ${userId}) 
+                  AND (status = 'online' OR en_linea = true)
               `
-              if (!activo) {
-                await sql`
-                  UPDATE repartidores 
-                  SET status = 'offline', en_linea = false, disponible = false, ultima_actividad = NOW()
-                  WHERE id = ${rep.id}
+              if (rep) {
+                const [activo] = await sql`
+                  SELECT 1 FROM pedidos 
+                  WHERE repartidor_id = ${rep.id} 
+                    AND status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
+                  LIMIT 1
                 `
-                console.log(`[ws:close] Repartidor ${rep.id} desconectado automáticamente al cerrar conexión`)
-                const targetUid = rep.user_id || rep.id
-                sendPushToUser(
-                  sql,
-                  targetUid,
-                  "🛵 Ya Voy Repartidor",
-                  "Te has desconectado automáticamente al cerrar la app. Abre la app cuando estés listo para recibir pedidos.",
-                  { tipo: "desconexion_inactividad" }
-                ).catch(() => {})
+                if (!activo) {
+                  await sql`
+                    UPDATE repartidores 
+                    SET status = 'offline', en_linea = false, disponible = false, ultima_actividad = NOW()
+                    WHERE id = ${rep.id}
+                  `
+                  console.log(`[ws:close] Repartidor ${rep.id} desconectado automáticamente tras grace period de 20s`)
+                  const targetUid = rep.user_id || rep.id
+                  sendPushToUser(
+                    sql,
+                    targetUid,
+                    "🛵 Ya Voy Repartidor",
+                    "Te has desconectado automáticamente al cerrar la app. Abre la app cuando estés listo para recibir pedidos.",
+                    { tipo: "desconexion_inactividad" }
+                  ).catch(() => {})
+                }
               }
+            } catch (e: any) {
+              console.error("[ws:close:repartidor]", e.message)
             }
-          } catch (e: any) {
-            console.error("[ws:close:repartidor]", e.message)
-          }
+          }, 20 * 1000)
+
+          desconexionTimers.set(userId, timer)
         }
       })
     }

@@ -149,40 +149,6 @@ export function initCronJobs() {
       }
 
       
-      // 2C. Auto-desconectar repartidores inactivos (sin actualizacion GPS por mas de 10 min y sin pedidos activos)
-      const inactivosRepartidores = await sql`
-        SELECT id FROM repartidores
-        WHERE (status = 'online' OR en_linea = true)
-          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '10 minutes')
-          AND id NOT IN (
-            SELECT DISTINCT repartidor_id FROM pedidos 
-            WHERE status IN ('preparando', 'listo', 'en_camino', 'esperando_cliente')
-              AND repartidor_id IS NOT NULL
-          )
-      `.catch(() => []);
-
-      if (inactivosRepartidores && inactivosRepartidores.length > 0) {
-        const inactivosIds = inactivosRepartidores.map((r: any) => r.id);
-        await sql`
-          UPDATE repartidores
-          SET status = 'offline', en_linea = false, disponible = false
-          WHERE id IN ${sql(inactivosIds)}
-        `.catch(() => {});
-
-        for (const r of inactivosRepartidores) {
-          try {
-            notificarCliente(r.id, "desconexion_inactividad", { en_linea: false });
-            sendPushToUser(
-              sql,
-              r.id,
-              "🛵 Ya Voy Repartidor",
-              "Te has desconectado automáticamente por inactividad. Abre la app cuando estés listo para recibir pedidos.",
-              { tipo: "desconexion_inactividad" }
-            ).catch(() => {});
-          } catch {}
-        }
-      }
-
       // 2B-Alerta: Avisar al Admin en Telegram si un pedido a domicilio lleva más de 10 minutos en 'listo' o 'preparando' sin repartidor
       const demoradosSinRep = await sql`
         SELECT p.id, p.total, p.costo_envio, v.nombre as negocio_nombre
@@ -191,8 +157,8 @@ export function initCronJobs() {
         WHERE p.status IN ('preparando', 'listo')
           AND (p.repartidor_id IS NULL OR p.repartidor_id = '')
           AND COALESCE(p.tipo_entrega, 'domicilio') != 'pickup'
-          AND p.creado_en < NOW() - INTERVAL '10 minutes'
-          AND p.creado_en > NOW() - INTERVAL '24 minutes'
+          AND COALESCE(p.actualizado_en, p.creado_en) < NOW() - INTERVAL '10 minutes'
+          AND COALESCE(p.actualizado_en, p.creado_en) > NOW() - INTERVAL '24 minutes'
       `.catch(() => [])
       for (const d of demoradosSinRep) {
         const pid = String(d.id)
@@ -220,7 +186,7 @@ export function initCronJobs() {
         WHERE status IN ('preparando', 'listo')
           AND (repartidor_id IS NULL OR repartidor_id = '')
           AND COALESCE(tipo_entrega, 'domicilio') != 'pickup'
-          AND creado_en < NOW() - INTERVAL '25 minutes'
+          AND COALESCE(actualizado_en, creado_en) < NOW() - INTERVAL '25 minutes'
         RETURNING *
       `
       for (const p of sinRepartidor) {
@@ -272,24 +238,24 @@ export function initCronJobs() {
         DELETE FROM device_tokens
         WHERE updated_at < NOW() - INTERVAL '90 days'
       `
-      // Limpiar movimientos de wallet de más de 7 días de antigüedad
+      // Conservar movimientos de wallet por 365 días para historial contable
       await sql`
         DELETE FROM wallet_movimientos
-        WHERE creado_en < NOW() - INTERVAL '7 days'
+        WHERE creado_en < NOW() - INTERVAL '365 days'
       `
     } catch (e: any) {
       console.error("[cron:tokens]", e.message)
     }
   }, 24 * 60 * 60 * 1000)
 
-  // ── 4. Auto-desconexión de repartidores inactivos (>5 min sin actividad ni pedidos en curso) ──
+  // ── 4. Auto-desconexión de repartidores inactivos (>15 min sin actividad ni pedidos en curso) ──
   setInterval(async () => {
     try {
       const inactivos = await sql`
         UPDATE repartidores
         SET status = 'offline', en_linea = false, disponible = false
         WHERE (status = 'online' OR en_linea = true)
-          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '5 minutes')
+          AND (ultima_actividad IS NULL OR ultima_actividad < NOW() - INTERVAL '15 minutes')
           AND id NOT IN (
             SELECT DISTINCT repartidor_id FROM pedidos 
             WHERE status IN ('asignado', 'preparando', 'listo', 'en_camino', 'esperando_cliente')
